@@ -1,0 +1,33 @@
+{
+  "name": "reel-estate-mcp",
+  "version": "0.1.0",
+  "description": "Model Context Protocol server for the Reel Estate backend — read-only access to users, projects, clips, and usage in MongoDB.",
+  "type": "module",
+  "bin": {
+    "reel-estate-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "smoke": "tsx scripts/smoke.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "dotenv": "^17.0.0",
+    "mongodb": "^6.12.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}
