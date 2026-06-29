@@ -1,35 +1,39 @@
 #!/usr/bin/env node
-import "dotenv/config";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { getDb, closeDb } from "./db.js";
+import { getConfig } from "./config.js";
+import { ClerkSession } from "./clerk-session.js";
+import { ApiClient } from "./api-client.js";
 import {
-  findUser,
+  whoami,
   listProjects,
   getProject,
+  projectStats,
   listClips,
-  getUsageSummary,
-  dbOverview,
+  listVoices,
+  getUsage,
+  listMovies,
+  listEndpoints,
+  apiRequest,
 } from "./tools.js";
 
 /**
- * Reel Estate backend MCP server.
+ * Reel Estate backend MCP server (HTTP edition).
  *
- * Exposes READ-ONLY tools over the backend's MongoDB so an assistant can
- * inspect users, projects, clips, and usage for support/debugging. No tool
- * here mutates data.
+ * Authenticates as a single configured user (MCP_USER) via the Clerk Backend
+ * API, then exposes tools that call the app's real HTTP endpoints with that
+ * user's bearer token. The generic `api_request` tool can reach any route;
+ * the rest are convenience wrappers.
  *
- * Transport is stdio, so NOTHING may be written to stdout except MCP protocol
- * frames — all diagnostics go to stderr (console.error).
+ * Transport is stdio — diagnostics go to stderr only; stdout is MCP frames.
  */
 
-const server = new McpServer({
-  name: "reel-estate-backend",
-  version: "0.1.0",
-});
+const session = new ClerkSession();
+const api = new ApiClient(session);
 
-/** Wrap a tool handler: run it, JSON-serialize the result, surface errors. */
+const server = new McpServer({ name: "reel-estate-backend", version: "0.2.0" });
+
 function ok(data: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
 }
@@ -39,19 +43,17 @@ function fail(err: unknown) {
 }
 
 server.registerTool(
-  "find_user",
+  "whoami",
   {
-    title: "Find user",
+    title: "Who am I",
     description:
-      "Look up a single user by ObjectId (24-char hex) or email. Returns profile, " +
-      "subscription, and account-level usage. The legacy password hash is never returned.",
-    inputSchema: {
-      user: z.string().describe("User ObjectId hex or email address."),
-    },
+      "Show which user the server is authenticated as (Clerk id, configured email/id, API base URL, " +
+      "read-only flag) and the live /users/profile response. Good first call to confirm auth works.",
+    inputSchema: {},
   },
-  async ({ user }) => {
+  async () => {
     try {
-      return ok(await findUser(await getDb(), { user }));
+      return ok(await whoami(session, api));
     } catch (e) {
       return fail(e);
     }
@@ -61,24 +63,22 @@ server.registerTool(
 server.registerTool(
   "list_projects",
   {
-    title: "List a user's projects",
-    description:
-      "List projects belonging to a user (by id or email), newest-interacted first. " +
-      "Returns lightweight summaries (counts, status, address) — not full timeline/images.",
+    title: "List projects",
+    description: "GET /projects for the authenticated user. Supports paging, sorting, search, and status filter.",
     inputSchema: {
-      user: z.string().describe("User ObjectId hex or email address."),
-      status: z
-        .enum(["draft", "processing", "completed", "failed"])
-        .optional()
-        .describe("Optional project status filter."),
-      limit: z.number().int().positive().optional().describe("Max projects to return (default 20)."),
-      skip: z.number().int().nonnegative().optional().describe("Pagination offset (default 0)."),
-      includeDeleted: z.boolean().optional().describe("Include soft-deleted projects (default false)."),
+      page: z.number().int().positive().optional(),
+      limit: z.number().int().positive().optional(),
+      status: z.enum(["draft", "processing", "completed", "failed"]).optional(),
+      sortBy: z.string().optional().describe("e.g. updatedAt, createdAt, name, lastInteractedAt"),
+      sortOrder: z.enum(["asc", "desc"]).optional(),
+      search: z.string().optional(),
+      starred: z.boolean().optional(),
+      folderId: z.string().optional(),
     },
   },
   async (args) => {
     try {
-      return ok(await listProjects(await getDb(), args));
+      return ok(await listProjects(api, args));
     } catch (e) {
       return fail(e);
     }
@@ -89,18 +89,28 @@ server.registerTool(
   "get_project",
   {
     title: "Get a project",
-    description:
-      "Fetch one project by id. The heavy `timeline` and `images` arrays are excluded " +
-      "by default; opt in with includeTimeline / includeImages.",
-    inputSchema: {
-      projectId: z.string().describe("Project ObjectId hex."),
-      includeTimeline: z.boolean().optional().describe("Include the full editor timeline (large)."),
-      includeImages: z.boolean().optional().describe("Include the images array with vision data (large)."),
-    },
+    description: "GET /projects/:id — full project document for the authenticated user.",
+    inputSchema: { id: z.string().describe("Project id.") },
   },
-  async (args) => {
+  async ({ id }) => {
     try {
-      return ok(await getProject(await getDb(), args));
+      return ok(await getProject(api, { id }));
+    } catch (e) {
+      return fail(e);
+    }
+  },
+);
+
+server.registerTool(
+  "project_stats",
+  {
+    title: "Project stats",
+    description: "GET /projects/stats — aggregate project counts/metrics for the authenticated user.",
+    inputSchema: {},
+  },
+  async () => {
+    try {
+      return ok(await projectStats(api));
     } catch (e) {
       return fail(e);
     }
@@ -112,22 +122,18 @@ server.registerTool(
   {
     title: "List clips",
     description:
-      "List generated video clips scoped by user and/or project. At least one of " +
-      "`user` or `projectId` is required. Returns clip status, motion, provider, and credits.",
+      "Clips for the authenticated user. With projectId -> GET /clips/project/:projectId; " +
+      "otherwise GET /clips (the clip library) with paging/status.",
     inputSchema: {
-      user: z.string().optional().describe("User ObjectId hex or email."),
-      projectId: z.string().optional().describe("Project ObjectId hex."),
-      status: z
-        .enum(["pending", "processing", "completed", "failed"])
-        .optional()
-        .describe("Optional clip processing-status filter."),
-      limit: z.number().int().positive().optional().describe("Max clips to return (default 20)."),
-      skip: z.number().int().nonnegative().optional().describe("Pagination offset (default 0)."),
+      projectId: z.string().optional(),
+      page: z.number().int().positive().optional(),
+      limit: z.number().int().positive().optional(),
+      status: z.enum(["pending", "processing", "completed", "failed"]).optional(),
     },
   },
   async (args) => {
     try {
-      return ok(await listClips(await getDb(), args));
+      return ok(await listClips(api, args));
     } catch (e) {
       return fail(e);
     }
@@ -135,19 +141,15 @@ server.registerTool(
 );
 
 server.registerTool(
-  "get_usage_summary",
+  "list_movies",
   {
-    title: "Get usage summary",
-    description:
-      "Aggregate a user's footprint: account credit/export usage, plan, project counts " +
-      "by status, and clip counts by status — a one-call support dashboard.",
-    inputSchema: {
-      user: z.string().describe("User ObjectId hex or email address."),
-    },
+    title: "List movies",
+    description: "Rendered movies for the user. With projectId -> GET /movies/project/:projectId; else GET /movies.",
+    inputSchema: { projectId: z.string().optional() },
   },
-  async ({ user }) => {
+  async (args) => {
     try {
-      return ok(await getUsageSummary(await getDb(), { user }));
+      return ok(await listMovies(api, args));
     } catch (e) {
       return fail(e);
     }
@@ -155,16 +157,73 @@ server.registerTool(
 );
 
 server.registerTool(
-  "db_overview",
+  "list_voices",
   {
-    title: "Database overview",
-    description:
-      "Estimated document counts for the core collections. Useful as a connectivity/health check.",
+    title: "List voices",
+    description: "GET /voices — voiceover voices available to the user (stock + cloned).",
     inputSchema: {},
   },
   async () => {
     try {
-      return ok(await dbOverview(await getDb()));
+      return ok(await listVoices(api));
+    } catch (e) {
+      return fail(e);
+    }
+  },
+);
+
+server.registerTool(
+  "get_usage",
+  {
+    title: "Get usage",
+    description: "GET /billing/usage — credit and export usage for the authenticated user.",
+    inputSchema: {},
+  },
+  async () => {
+    try {
+      return ok(await getUsage(api));
+    } catch (e) {
+      return fail(e);
+    }
+  },
+);
+
+server.registerTool(
+  "list_endpoints",
+  {
+    title: "List API endpoints",
+    description:
+      "Return the curated catalog of API endpoints (grouped) so you know what `api_request` can call. " +
+      "Not exhaustive — every mounted route is reachable, this covers the main surface.",
+    inputSchema: {},
+  },
+  async () => {
+    try {
+      return ok(listEndpoints());
+    } catch (e) {
+      return fail(e);
+    }
+  },
+);
+
+server.registerTool(
+  "api_request",
+  {
+    title: "Call any API endpoint",
+    description:
+      "Generic authenticated request to ANY backend route. Path is relative to the API base " +
+      "(e.g. '/projects' or 'admin/users'). Use list_endpoints to discover paths. Non-GET methods " +
+      "are blocked when MCP_READONLY is set. Returns { status, ok, request, data } including error envelopes.",
+    inputSchema: {
+      method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE"]),
+      path: z.string().describe("Path relative to API base, e.g. /projects/123 or admin/stats"),
+      query: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).optional(),
+      body: z.unknown().optional().describe("JSON body for non-GET requests."),
+    },
+  },
+  async (args) => {
+    try {
+      return ok(await apiRequest(api, args as any));
     } catch (e) {
       return fail(e);
     }
@@ -172,13 +231,18 @@ server.registerTool(
 );
 
 async function main() {
+  // Fail fast with a clear message if required config is missing.
+  getConfig();
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error("[reel-estate-mcp] server connected over stdio");
+  console.error(
+    `[reel-estate-mcp] connected over stdio — base=${getConfig().apiBaseUrl} user=${getConfig().user}` +
+      (getConfig().readOnly ? " (read-only)" : ""),
+  );
 }
 
 const shutdown = async () => {
-  await closeDb().catch(() => {});
+  await session.dispose().catch(() => {});
   process.exit(0);
 };
 process.on("SIGINT", shutdown);

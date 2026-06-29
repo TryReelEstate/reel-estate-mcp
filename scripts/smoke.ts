@@ -1,51 +1,48 @@
-import "dotenv/config";
-import { getDb, closeDb } from "../src/db.js";
-import {
-  findUser,
-  listProjects,
-  getProject,
-  listClips,
-  getUsageSummary,
-  dbOverview,
-} from "../src/tools.js";
+import { ClerkSession } from "../src/clerk-session.js";
+import { ApiClient } from "../src/api-client.js";
+import { getConfig } from "../src/config.js";
+import { whoami, listProjects, getUsage, projectStats } from "../src/tools.js";
 
 /**
- * Smoke test: exercises every read-only tool against the configured database.
- * Run with `npm run smoke`. Uses the known staging example user by default;
- * override with `SMOKE_USER=<id-or-email>`.
+ * Smoke test: authenticates as MCP_USER via Clerk and calls a few GET
+ * endpoints. Read-only by intent (never issues writes), so it's safe to run
+ * against any environment. Run with `npm run smoke`.
  */
-const USER = process.env.SMOKE_USER ?? "69b0b5cffc721a453860a8e6";
-
-function show(label: string, data: unknown) {
-  console.log(`\n=== ${label} ===`);
-  console.log(JSON.stringify(data, null, 2));
-}
-
 async function run() {
-  const db = await getDb();
+  const cfg = getConfig();
+  console.log(`Base URL : ${cfg.apiBaseUrl}`);
+  console.log(`User     : ${cfg.user}`);
+  console.log(`Read-only: ${cfg.readOnly}\n`);
 
-  show("db_overview", await dbOverview(db));
+  const session = new ClerkSession();
+  const api = new ApiClient(session);
 
-  const user = await findUser(db, { user: USER });
-  show("find_user", user);
+  try {
+    const who = await whoami(session, api);
+    console.log("=== whoami ===");
+    console.log(JSON.stringify(who, null, 2));
 
-  const projects = await listProjects(db, { user: USER, limit: 3 });
-  show("list_projects (limit 3)", projects);
-
-  const firstProjectId = projects.projects[0]?._id;
-  if (firstProjectId) {
-    show("get_project (summary)", await getProject(db, { projectId: firstProjectId }));
+    if (who.profileStatus === 401) {
+      console.error(
+        "\n⚠️  401 from the API. The Clerk session was minted, but the API rejected the token — " +
+          "almost always a Clerk-instance/base-URL mismatch (test keys vs production, or vice versa). " +
+          "Match CLERK_SECRET_KEY to API_BASE_URL.",
+      );
+    } else {
+      console.log("\n=== project_stats ===");
+      console.log(JSON.stringify(await projectStats(api), null, 2));
+      console.log("\n=== list_projects (limit 3) ===");
+      console.log(JSON.stringify(await listProjects(api, { limit: 3 }), null, 2));
+      console.log("\n=== get_usage ===");
+      console.log(JSON.stringify(await getUsage(api), null, 2));
+    }
+  } finally {
+    await session.dispose().catch(() => {});
   }
-
-  show("list_clips (limit 3)", await listClips(db, { user: USER, limit: 3 }));
-  show("get_usage_summary", await getUsageSummary(db, { user: USER }));
-
-  await closeDb();
-  console.log("\n✅ smoke test complete");
+  console.log("\n✅ smoke complete");
 }
 
-run().catch(async (err) => {
-  console.error("❌ smoke test failed:", err);
-  await closeDb().catch(() => {});
+run().catch((err) => {
+  console.error("❌ smoke failed:", err);
   process.exit(1);
 });

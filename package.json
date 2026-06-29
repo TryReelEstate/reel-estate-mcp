@@ -1,7 +1,7 @@
 {
   "name": "reel-estate-mcp",
-  "version": "0.1.0",
-  "description": "Model Context Protocol server for the Reel Estate backend — read-only access to users, projects, clips, and usage in MongoDB.",
+  "version": "0.2.0",
+  "description": "Model Context Protocol server for the Reel Estate backend — authenticates as a user via Clerk and calls the app's HTTP API.",
   "type": "module",
   "bin": {
     "reel-estate-mcp": "dist/index.js"
@@ -20,9 +20,9 @@
     "smoke": "tsx scripts/smoke.ts"
   },
   "dependencies": {
+    "@clerk/backend": "^3.7.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "dotenv": "^17.0.0",
-    "mongodb": "^6.12.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {

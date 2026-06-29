@@ -1,59 +1,95 @@
 # reel-estate-mcp
 
-A [Model Context Protocol](https://modelcontextprotocol.io) server that gives an
-AI assistant (Claude Desktop, Claude Code, Cursor, etc.) **read-only** access to
-the Reel Estate backend's MongoDB — users, projects, clips, and usage — for
-support, debugging, and analytics.
+A [Model Context Protocol](https://modelcontextprotocol.io) server that
+authenticates as a Reel Estate **user via Clerk** and calls the backend's
+**HTTP API** as that user. Give an assistant (Claude Desktop, Claude Code,
+Cursor) the ability to drive the real product API — list projects, inspect
+clips, check usage, hit any endpoint — exactly as the signed-in user could.
 
-> **Read-only by design.** Every tool issues `find` / `aggregate` / `count`
-> only. There are no write/update/delete tools. Point it at **staging** unless
-> you have a deliberate reason to inspect production.
+> It talks to the deployed API over HTTP; it does **not** touch the database
+> directly. Auth is a genuine Clerk session token, so the API's own
+> authorization rules apply.
+
+## How auth works
+
+```
+MCP_USER (email or user_… id)
+   │  Clerk Backend API (CLERK_SECRET_KEY)
+   ▼
+resolve Clerk user id  ──►  createSession({ userId })  ──►  getToken() → JWT
+                                                              │
+                          Authorization: Bearer <JWT>  ◄──────┘
+                                   │
+                                   ▼
+                       https://<api-host>/api/v1/...
+```
+
+The server mints a session token (cached, auto-refreshed before expiry) and
+sends it as a bearer token on every request. The session is revoked on
+shutdown.
+
+### ⚠️ Clerk instance must match the API environment
+
+A Clerk session token is only accepted by an API that trusts the **same Clerk
+instance**. Pair them correctly or the API returns `401 INVALID_TOKEN` even
+though the token minted fine:
+
+| API target | Clerk keys |
+| --- | --- |
+| Production backend | **live** (`sk_live_…`) |
+| Staging / localhost backend | **test** (`sk_test_…`) |
+
+### ⚠️ `API_BASE_URL` is the *backend* host, not the website
+
+`https://tryreelestate.com` is the Next.js **frontend** — its `/api/v1/*` paths
+404 with an HTML page. Point `API_BASE_URL` at the **backend** host (the same
+URL the frontend uses as `NEXT_PUBLIC_API_URL`), e.g. your Heroku/Render app
+URL or an `api.`/`server.` subdomain. Confirm with:
+
+```bash
+curl https://<api-host>/health      # → {"status":"ok","environment":"staging",...}
+```
 
 ## Tools
 
-| Tool | What it returns |
+| Tool | Endpoint |
 | --- | --- |
-| `find_user` | One user by **ObjectId or email** — profile, subscription, account usage. Password hash is never returned. |
-| `list_projects` | A user's projects (summaries: status, address, image/clip/voiceover counts), newest-interacted first, paginated. |
-| `get_project` | One project by id. The heavy `timeline` and `images` arrays are excluded unless you set `includeTimeline` / `includeImages`. |
-| `list_clips` | Generated clips scoped by `user` and/or `projectId`, with status/motion/provider/credits. |
-| `get_usage_summary` | One-call support dashboard: account credit/export usage + project and clip counts by status. |
-| `db_overview` | Estimated document counts for core collections (connectivity/health check). |
+| `whoami` | `GET /users/profile` + identity/config — **run this first** to confirm auth |
+| `list_projects` | `GET /projects` (paging, sort, search, status) |
+| `get_project` | `GET /projects/:id` |
+| `project_stats` | `GET /projects/stats` |
+| `list_clips` | `GET /clips` or `GET /clips/project/:projectId` |
+| `list_movies` | `GET /movies` or `GET /movies/project/:projectId` |
+| `list_voices` | `GET /voices` |
+| `get_usage` | `GET /billing/usage` |
+| `list_endpoints` | the curated API catalog (so you know what `api_request` can call) |
+| `api_request` | **any** route, any method — the escape hatch that covers the whole API |
+
+`api_request` is the workhorse: `{ method, path, query?, body? }`. Convenience
+tools are just typed shortcuts over common endpoints.
 
 ## Setup
 
 ```bash
 npm install
-cp .env.example .env   # then fill in MONGODB_URI
+cp .env.example .env   # fill in CLERK_SECRET_KEY, MCP_USER, API_BASE_URL
+npm run typecheck
+npm run smoke          # authenticates and calls a few GET endpoints
 ```
 
 `.env`:
 
 ```
-MONGODB_URI=mongodb+srv://<user>:<password>@reel-estate.dumnqll.mongodb.net/reel-estate-v2?retryWrites=true&w=majority&family=4
-MCP_MAX_LIMIT=100
+CLERK_SECRET_KEY=sk_test_********           # MUST match API_BASE_URL's environment
+MCP_USER=jeff@tryreelestate.com             # email or user_… id
+API_BASE_URL=https://<backend-host>         # bare origin → "/api/v1" appended
+MCP_TOKEN_TTL_SECONDS=3600                  # optional
+MCP_READONLY=                               # optional: 1/true blocks non-GET
 ```
 
-The database name comes from the connection string (`reel-estate-v2` for
-staging). `MCP_MAX_LIMIT` is the hard ceiling for any list tool's `limit`.
+## Connecting to a client
 
-### Verify it works
-
-```bash
-npm run typecheck       # tsc, no emit
-npm run smoke           # exercises every tool against the configured DB
-```
-
-`npm run smoke` defaults to the known staging example user
-(`69b0b5cffc721a453860a8e6`); override with `SMOKE_USER=<id-or-email>`.
-
-## Connecting it to a client
-
-### Claude Desktop
-
-Add to `claude_desktop_config.json` (macOS:
-`~/Library/Application Support/Claude/`, Windows:
-`%APPDATA%\Claude\`):
+### Claude Desktop (`claude_desktop_config.json`)
 
 ```json
 {
@@ -62,101 +98,65 @@ Add to `claude_desktop_config.json` (macOS:
       "command": "npx",
       "args": ["tsx", "C:/Users/jgoye/Documents/GitHub/reel-estate-mcp/src/index.ts"],
       "env": {
-        "MONGODB_URI": "mongodb+srv://<user>:<password>@reel-estate.dumnqll.mongodb.net/reel-estate-v2?retryWrites=true&w=majority&family=4"
+        "CLERK_SECRET_KEY": "sk_test_********",
+        "MCP_USER": "jeff@tryreelestate.com",
+        "API_BASE_URL": "https://<backend-host>"
       }
     }
   }
 }
 ```
 
-> Putting `MONGODB_URI` in the `env` block keeps the secret out of the repo and
-> out of `.env`. If you'd rather use `.env`, drop the `env` block.
-
 ### Claude Code
 
 ```bash
-claude mcp add reel-estate -- npx tsx C:/Users/jgoye/Documents/GitHub/reel-estate-mcp/src/index.ts
-```
-
-### Production build (optional)
-
-```bash
-npm run build      # emits dist/
-node dist/index.js # run the compiled server instead of tsx
+claude mcp add reel-estate \
+  -e CLERK_SECRET_KEY=sk_test_******** \
+  -e MCP_USER=jeff@tryreelestate.com \
+  -e API_BASE_URL=https://<backend-host> \
+  -- npx tsx C:/Users/jgoye/Documents/GitHub/reel-estate-mcp/src/index.ts
 ```
 
 ## Example calls
 
-These use the real staging example user **Jeff Goyette**
-(`jeff@tryreelestate.com`, id `69b0b5cffc721a453860a8e6`).
-
-**`find_user`** — either form works:
-
 ```jsonc
-{ "user": "jeff@tryreelestate.com" }
-// or
-{ "user": "69b0b5cffc721a453860a8e6" }
+// whoami  → confirm we're authenticated as the right user
+{}
+
+// list_projects
+{ "limit": 5, "status": "completed", "sortBy": "updatedAt", "sortOrder": "desc" }
+
+// api_request — anything not covered by a convenience tool
+{ "method": "GET",  "path": "/billing/can-generate" }
+{ "method": "POST", "path": "/staging/switch-plan", "body": { "plan": "pro" } }
+{ "method": "GET",  "path": "/admin/stats" }          // requires role=admin
 ```
 
-```jsonc
-{
-  "found": true,
-  "_id": "69b0b5cffc721a453860a8e6",
-  "email": "jeff@tryreelestate.com",
-  "name": "Jeff Goyette",
-  "role": "admin",
-  "subscription": { "status": "active", "plan": "pro", "cancelAtPeriodEnd": false },
-  "usage": { "creditsUsed": 1327, "creditsLimit": 1328, "videosGenerated": 571, "...": "..." }
-}
-```
+## Read-only mode
 
-**`get_usage_summary`** — `{ "user": "jeff@tryreelestate.com" }`:
+Set `MCP_READONLY=1` to block every non-GET request at the client layer — a
+safety belt when pointing at production. Default is full access (all methods).
 
-```jsonc
-{
-  "subscription": { "plan": "pro", "status": "active" },
-  "projects": { "total": 146, "byStatus": { "completed": { "count": 77 }, "draft": { "count": 69 } } },
-  "clips":    { "total": 530, "byStatus": { "completed": { "count": 530, "creditsUsed": 1335 } } }
-}
-```
+## Architecture
 
-**`list_projects`** — `{ "user": "jeff@tryreelestate.com", "status": "completed", "limit": 5 }`
-
-**`list_clips`** — scope by user, project, or both:
-
-```jsonc
-{ "user": "jeff@tryreelestate.com", "status": "failed", "limit": 10 }
-{ "projectId": "6a35cac1611fbf84123fb5b8" }
-```
-
-**`get_project`** — summary by default; opt into heavy arrays:
-
-```jsonc
-{ "projectId": "6a3df4036903c42f9daaf089" }                         // no timeline/images
-{ "projectId": "6a3df4036903c42f9daaf089", "includeImages": true }  // + images[] with vision data
-```
-
-## Architecture notes
-
-- **`src/db.ts`** — one lazily-connected, pooled `MongoClient` shared across
-  tool calls; `userFilterFrom()` accepts an ObjectId hex or an email.
-- **`src/tools.ts`** — the query layer as plain async functions (so the smoke
-  test calls them directly, no transport needed). List tools use aggregation
-  with `$size` so they return array *counts* without transferring multi-MB
-  `timeline` / `images` blobs.
-- **`src/index.ts`** — registers each function as an MCP tool over **stdio**.
-  Because stdio is the transport, all diagnostics go to **stderr** — stdout
-  carries only MCP protocol frames.
-- Soft deletes: `list_projects` excludes `deletedAt != null` by default
-  (`includeDeleted: true` to override), mirroring the backend's query hooks.
+- **`src/config.ts`** — validated env; normalizes `API_BASE_URL` (appends
+  `/api/v1`), reads the read-only flag and token TTL.
+- **`src/clerk-session.ts`** — resolves the Clerk user, creates a session, and
+  mints/caches/refreshes bearer tokens; revokes the session on shutdown.
+- **`src/api-client.ts`** — authed `fetch` wrapper; never throws on non-2xx so
+  the model sees the API's error envelope; enforces the read-only guard.
+- **`src/catalog.ts`** — the endpoint catalog surfaced by `list_endpoints`.
+- **`src/tools.ts`** — tools as plain functions (smoke-testable without a
+  transport).
+- **`src/index.ts`** — registers the tools as MCP tools over **stdio**
+  (diagnostics → stderr, protocol → stdout).
 
 ## Adding a tool
 
-1. Write a `async function fooBar(db, args)` in `src/tools.ts` returning a plain
-   object.
-2. Register it in `src/index.ts` with `server.registerTool(...)` and a Zod
-   `inputSchema`.
-3. Add a line to `scripts/smoke.ts` to cover it.
+1. Add `async function fooBar(api, args)` in `src/tools.ts` (use `api.get(...)`
+   or `api.request(...)`).
+2. Register it in `src/index.ts` with a Zod `inputSchema`.
+3. Add it to `scripts/smoke.ts` if it's a GET.
 
-Keep new tools read-only unless there's a deliberate decision (and guardrails)
-to allow writes.
+Everything is already reachable through `api_request`; convenience tools just
+make the common paths first-class.
