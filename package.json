@@ -1,7 +1,7 @@
 {
   "name": "reel-estate-mcp",
-  "version": "0.2.0",
-  "description": "Model Context Protocol server for the Reel Estate backend — authenticates as a user via Clerk and calls the app's HTTP API.",
+  "version": "0.3.0",
+  "description": "Self-hosted MCP server for the Reel Estate backend — an OAuth client of the backend's /mcp endpoint that adds local-filesystem superpowers (e.g. uploading local images).",
   "type": "module",
   "bin": {
     "reel-estate-mcp": "dist/index.js"
@@ -20,7 +20,6 @@
     "smoke": "tsx scripts/smoke.ts"
   },
   "dependencies": {
-    "@clerk/backend": "^3.7.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "dotenv": "^17.0.0",
     "zod": "^3.23.8"

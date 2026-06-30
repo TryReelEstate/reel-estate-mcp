@@ -1,46 +1,37 @@
 import "dotenv/config";
+import { homedir } from "node:os";
+import { join } from "node:path";
 
 /**
- * Centralized, validated configuration for the MCP server.
+ * Centralized, validated configuration.
  *
- * The server authenticates as ONE user (MCP_USER) using a Clerk Backend API
- * secret key, then calls the Reel Estate HTTP API as that user.
- *
- * IMPORTANT — instance matching: a Clerk session token is only accepted by an
- * API that trusts the SAME Clerk instance. Test keys (sk_test_/pk_test_) pair
- * with staging/localhost; live keys (sk_live_/pk_live_) pair with production
- * (https://tryreelestate.com). Mismatched pairs authenticate at Clerk but get
- * 401 INVALID_TOKEN from the API.
+ * This server is an **OAuth client of the backend's embedded `/mcp` endpoint**.
+ * It does NOT mint Clerk sessions and needs NO secret key — the user signs in
+ * through their browser once, and tokens are cached locally. All API calls are
+ * proxied through `/mcp` (the backend is the auth authority), so this server's
+ * only privileged job is local file access (e.g. add_image_from_file).
  */
 
-function required(name: string): string {
-  const v = process.env[name];
-  if (!v || !v.trim()) {
-    throw new Error(
-      `Missing required env var ${name}. Copy .env.example to .env and fill it in, ` +
-        `or pass it in the MCP server's "env" config block.`,
-    );
-  }
-  return v.trim();
-}
-
-function normalizeBaseUrl(raw: string): string {
+function deriveMcpUrl(raw: string): string {
   let url = raw.trim().replace(/\/+$/, "");
-  // Accept a bare origin and append the API prefix the app mounts everything under.
-  if (!/\/api\/v\d+$/.test(url)) {
-    url = `${url}/api/v1`;
-  }
+  // Accept a bare origin and append the MCP mount path. NOTE: `/mcp` is mounted
+  // on the BACKEND origin (the API host), not the marketing site.
+  if (!/\/mcp$/.test(url)) url = `${url}/mcp`;
   return url;
 }
 
 export interface Config {
-  clerkSecretKey: string;
-  /** Email address OR Clerk user id (user_...) to authenticate as. */
-  user: string;
-  apiBaseUrl: string;
-  /** Seconds of life requested for each minted session token. */
-  tokenTtlSeconds: number;
-  /** When true, only GET requests are permitted. */
+  /** Full URL to the backend's MCP endpoint, e.g. https://api.example.com/mcp */
+  mcpServerUrl: string;
+  /** Directory where OAuth client registration + tokens are cached. */
+  oauthStoreDir: string;
+  /** Loopback port the browser is redirected back to after authorization. */
+  callbackPort: number;
+  /** Computed redirect URI (must match the registered client). */
+  redirectUrl: string;
+  /** Optional OAuth scope override; omitted -> negotiated from server metadata. */
+  scope?: string;
+  /** When true, only GET requests are permitted (mutating tools are blocked). */
   readOnly: boolean;
 }
 
@@ -48,11 +39,23 @@ let cached: Config | null = null;
 
 export function getConfig(): Config {
   if (cached) return cached;
+
+  const rawServer = process.env.MCP_SERVER_URL ?? process.env.API_BASE_URL;
+  if (!rawServer || !rawServer.trim()) {
+    throw new Error(
+      "Missing MCP_SERVER_URL — the backend origin hosting the /mcp endpoint " +
+        "(e.g. https://your-backend.herokuapp.com). Copy .env.example to .env and set it.",
+    );
+  }
+
+  const callbackPort = Number(process.env.MCP_OAUTH_CALLBACK_PORT ?? 8765) || 8765;
+
   cached = {
-    clerkSecretKey: required("CLERK_SECRET_KEY"),
-    user: required("MCP_USER"),
-    apiBaseUrl: normalizeBaseUrl(process.env.API_BASE_URL ?? "https://tryreelestate.com"),
-    tokenTtlSeconds: Number(process.env.MCP_TOKEN_TTL_SECONDS ?? 3600) || 3600,
+    mcpServerUrl: deriveMcpUrl(rawServer),
+    oauthStoreDir: process.env.MCP_OAUTH_STORE_DIR ?? join(homedir(), ".reel-estate-mcp"),
+    callbackPort,
+    redirectUrl: `http://localhost:${callbackPort}/callback`,
+    scope: process.env.MCP_OAUTH_SCOPE?.trim() || undefined,
     readOnly: /^(1|true|yes)$/i.test(process.env.MCP_READONLY ?? ""),
   };
   return cached;

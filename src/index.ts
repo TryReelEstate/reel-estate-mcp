@@ -3,8 +3,8 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { getConfig } from "./config.js";
-import { ClerkSession } from "./clerk-session.js";
 import { ApiClient } from "./api-client.js";
+import { close as closeUpstream } from "./upstream.js";
 import {
   whoami,
   listProjects,
@@ -30,10 +30,9 @@ import {
  * Transport is stdio — diagnostics go to stderr only; stdout is MCP frames.
  */
 
-const session = new ClerkSession();
-const api = new ApiClient(session);
+const api = new ApiClient();
 
-const server = new McpServer({ name: "reel-estate-backend", version: "0.2.0" });
+const server = new McpServer({ name: "reel-estate-backend", version: "0.3.0" });
 
 function ok(data: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
@@ -48,13 +47,14 @@ server.registerTool(
   {
     title: "Who am I",
     description:
-      "Show which user the server is authenticated as (Clerk id, configured email/id, API base URL, " +
-      "read-only flag) and the live /users/profile response. Good first call to confirm auth works.",
+      "Show the upstream MCP URL, read-only flag, and the live /users/profile response for the " +
+      "OAuth-authenticated user. Good first call to confirm the browser login worked. The FIRST call " +
+      "may open a browser to authorize.",
     inputSchema: {},
   },
   async () => {
     try {
-      return ok(await whoami(session, api));
+      return ok(await whoami(api));
     } catch (e) {
       return fail(e);
     }
@@ -258,17 +258,18 @@ server.registerTool(
 
 async function main() {
   // Fail fast with a clear message if required config is missing.
-  getConfig();
+  const cfg = getConfig();
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error(
-    `[reel-estate-mcp] connected over stdio — base=${getConfig().apiBaseUrl} user=${getConfig().user}` +
-      (getConfig().readOnly ? " (read-only)" : ""),
+    `[reel-estate-mcp] ready over stdio — upstream=${cfg.mcpServerUrl}` +
+      (cfg.readOnly ? " (read-only)" : "") +
+      ". OAuth login happens on the first tool call.",
   );
 }
 
 const shutdown = async () => {
-  await session.dispose().catch(() => {});
+  await closeUpstream().catch(() => {});
   process.exit(0);
 };
 process.on("SIGINT", shutdown);

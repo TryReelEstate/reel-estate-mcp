@@ -1,92 +1,85 @@
 # reel-estate-mcp
 
-A [Model Context Protocol](https://modelcontextprotocol.io) server that
-authenticates as a Reel Estate **user via Clerk** and calls the backend's
-**HTTP API** as that user. Give an assistant (Claude Desktop, Claude Code,
-Cursor) the ability to drive the real product API — list projects, inspect
-clips, check usage, hit any endpoint — exactly as the signed-in user could.
+A self-hosted [Model Context Protocol](https://modelcontextprotocol.io) server
+that gives an assistant (Claude Desktop, Claude Code, Cursor) the Reel Estate
+product API **plus local-filesystem superpowers** — most notably uploading
+**local image files** into a project.
 
-> It talks to the deployed API over HTTP; it does **not** touch the database
-> directly. Auth is a genuine Clerk session token, so the API's own
-> authorization rules apply.
+It is an **OAuth client of the backend's embedded `/mcp` endpoint**. It does
+**not** mint Clerk sessions and needs **no secret key**: you sign in through
+your browser once, tokens are cached locally, and every API call is proxied
+through `/mcp` (the backend stays the single auth authority). The only thing
+this server adds is the ability to read local files and stream their bytes
+straight to storage — something a remote MCP can't do.
 
 ## How auth works
 
 ```
-MCP_USER (email or user_… id)
-   │  Clerk Backend API (CLERK_SECRET_KEY)
+first tool call
+   │   StreamableHTTP client ──► backend /mcp  (401, needs auth)
    ▼
-resolve Clerk user id  ──►  createSession({ userId })  ──►  getToken() → JWT
-                                                              │
-                          Authorization: Bearer <JWT>  ◄──────┘
-                                   │
-                                   ▼
-                       https://<api-host>/api/v1/...
+opens your browser ──► Clerk OAuth (DCR + PKCE) ──► you approve
+   │                                                   │
+   ▼                                                   ▼
+loopback http://localhost:8765/callback?code=…   access + refresh tokens
+   │                                                   │
+   └────────────► finishAuth(code) ──► tokens cached ──┘
+                                       (~/.reel-estate-mcp)
+
+every later call:  callTool("api_request", …) over the authed /mcp connection
 ```
 
-The server mints a session token (cached, auto-refreshed before expiry) and
-sends it as a bearer token on every request. The session is revoked on
-shutdown.
+- **No secrets to distribute** — public client + PKCE, browser login per user.
+- **Prod-capable** — uses the same OAuth the backend already serves at `/mcp`
+  (unlike server-side Clerk session minting, which only works on dev instances).
+- **Re-authorize / switch user** — delete the token cache dir and run again.
 
-### ⚠️ Clerk instance must match the API environment
+### `MCP_SERVER_URL` is the *backend* origin, not the website
 
-A Clerk session token is only accepted by an API that trusts the **same Clerk
-instance**. Pair them correctly or the API returns `401 INVALID_TOKEN` even
-though the token minted fine:
-
-| API target | Clerk keys |
-| --- | --- |
-| Production backend | **live** (`sk_live_…`) |
-| Staging / localhost backend | **test** (`sk_test_…`) |
-
-### ⚠️ `API_BASE_URL` is the *backend* host, not the website
-
-`https://tryreelestate.com` is the Next.js **frontend** — its `/api/v1/*` paths
-404 with an HTML page. Point `API_BASE_URL` at the **backend** host (the same
-URL the frontend uses as `NEXT_PUBLIC_API_URL`), e.g. your Heroku/Render app
-URL or an `api.`/`server.` subdomain. Confirm with:
-
-```bash
-curl https://<api-host>/health      # → {"status":"ok","environment":"staging",...}
-```
+`/mcp` is mounted on the **backend** host (the same origin the frontend uses as
+its API base), e.g. your Heroku/Render app URL — not the marketing site. A bare
+origin gets `/mcp` appended automatically.
 
 ## Tools
 
 | Tool | Endpoint |
 | --- | --- |
-| `whoami` | `GET /users/profile` + identity/config — **run this first** to confirm auth |
+| `whoami` | `GET /users/profile` + config — **run this first**; first call opens the browser to authorize |
 | `list_projects` | `GET /projects` (paging, sort, search, status) |
 | `get_project` | `GET /projects/:id` |
 | `project_stats` | `GET /projects/stats` |
 | `list_clips` | `GET /clips` or `GET /clips/project/:projectId` |
 | `list_movies` | `GET /movies` or `GET /movies/project/:projectId` |
 | `list_voices` | `GET /voices` |
-| `get_usage` | `GET /billing/usage` |
 | `add_image_from_file` | upload a **local** image file to a project — presigned `PUT` to storage, then attach (no storage creds) |
 | `list_endpoints` | the curated API catalog (so you know what `api_request` can call) |
 | `api_request` | **any** route, any method — the escape hatch that covers the whole API |
 
-`api_request` is the workhorse: `{ method, path, query?, body? }`. Convenience
-tools are just typed shortcuts over common endpoints.
+All API tools are proxied through the backend's `/mcp` `api_request` tool, so
+the backend's own authorization rules apply. `api_request` is the workhorse:
+`{ method, path, query?, body? }`.
 
 ## Setup
 
 ```bash
 npm install
-cp .env.example .env   # fill in CLERK_SECRET_KEY, MCP_USER, API_BASE_URL
+cp .env.example .env   # set MCP_SERVER_URL (the backend origin hosting /mcp)
 npm run typecheck
-npm run smoke          # authenticates and calls a few GET endpoints
+npm run smoke          # opens a browser to authorize, then calls a few GETs
 ```
 
 `.env`:
 
 ```
-CLERK_SECRET_KEY=sk_test_********           # MUST match API_BASE_URL's environment
-MCP_USER=jeff@tryreelestate.com             # email or user_… id
-API_BASE_URL=https://<backend-host>         # bare origin → "/api/v1" appended
-MCP_TOKEN_TTL_SECONDS=3600                  # optional
-MCP_READONLY=                               # optional: 1/true blocks non-GET
+MCP_SERVER_URL=https://<backend-host>   # bare origin → "/mcp" appended
+MCP_OAUTH_CALLBACK_PORT=8765            # optional; loopback port for the redirect
+MCP_OAUTH_STORE_DIR=                    # optional; default ~/.reel-estate-mcp
+MCP_OAUTH_SCOPE=                        # optional; negotiated from metadata if blank
+MCP_READONLY=                           # optional: 1/true blocks non-GET
 ```
+
+> The backend must have **Dynamic Client Registration** enabled in its Clerk
+> dashboard for first-time OAuth to register this client automatically.
 
 ## Connecting to a client
 
@@ -99,9 +92,7 @@ MCP_READONLY=                               # optional: 1/true blocks non-GET
       "command": "npx",
       "args": ["tsx", "C:/Users/jgoye/Documents/GitHub/reel-estate-mcp/src/index.ts"],
       "env": {
-        "CLERK_SECRET_KEY": "sk_test_********",
-        "MCP_USER": "jeff@tryreelestate.com",
-        "API_BASE_URL": "https://<backend-host>"
+        "MCP_SERVER_URL": "https://<backend-host>"
       }
     }
   }
@@ -112,50 +103,52 @@ MCP_READONLY=                               # optional: 1/true blocks non-GET
 
 ```bash
 claude mcp add reel-estate \
-  -e CLERK_SECRET_KEY=sk_test_******** \
-  -e MCP_USER=jeff@tryreelestate.com \
-  -e API_BASE_URL=https://<backend-host> \
+  -e MCP_SERVER_URL=https://<backend-host> \
   -- npx tsx C:/Users/jgoye/Documents/GitHub/reel-estate-mcp/src/index.ts
 ```
+
+The first tool call opens your browser to authorize. If the browser can't open
+(headless box), copy the URL printed to stderr.
 
 ## Example calls
 
 ```jsonc
-// whoami  → confirm we're authenticated as the right user
+// whoami  → first call authorizes via the browser, then confirms the user
 {}
 
-// list_projects
-{ "limit": 5, "status": "completed", "sortBy": "updatedAt", "sortOrder": "desc" }
+// add_image_from_file  → upload a LOCAL photo into a project
+{ "projectId": "6a4444cb7cd177ef1136daa1", "path": "C:/photos/exterior.jpg", "caption": "Front exterior" }
 
 // api_request — anything not covered by a convenience tool
 { "method": "GET",  "path": "/billing/can-generate" }
-{ "method": "POST", "path": "/staging/switch-plan", "body": { "plan": "pro" } }
-{ "method": "GET",  "path": "/admin/stats" }          // requires role=admin
+{ "method": "POST", "path": "/projects", "body": { "name": "123 Main St" } }
 ```
 
 ## Read-only mode
 
-Set `MCP_READONLY=1` to block every non-GET request at the client layer — a
-safety belt when pointing at production. Default is full access (all methods).
+Set `MCP_READONLY=1` to block every non-GET request at this layer — a safety
+belt when pointing at production. Default is full access (all methods).
 
 ## Architecture
 
-- **`src/config.ts`** — validated env; normalizes `API_BASE_URL` (appends
-  `/api/v1`), reads the read-only flag and token TTL.
-- **`src/clerk-session.ts`** — resolves the Clerk user, creates a session, and
-  mints/caches/refreshes bearer tokens; revokes the session on shutdown.
-- **`src/api-client.ts`** — authed `fetch` wrapper; never throws on non-2xx so
-  the model sees the API's error envelope; enforces the read-only guard.
+- **`src/config.ts`** — validated env; derives the `/mcp` URL, OAuth store dir,
+  loopback callback port, read-only flag.
+- **`src/oauth.ts`** — `OAuthClientProvider`: caches the DCR client + tokens +
+  PKCE verifier on disk; opens the system browser to authorize.
+- **`src/upstream.ts`** — the single OAuth'd MCP client connection to `/mcp`
+  (with the loopback callback server); `callTool` / `callApiRequest` proxies.
+- **`src/api-client.ts`** — `ApiClient` over `callApiRequest`; same
+  `{ status, ok, url, method, data }` shape as before, enforces read-only.
 - **`src/catalog.ts`** — the endpoint catalog surfaced by `list_endpoints`.
-- **`src/tools.ts`** — tools as plain functions (smoke-testable without a
-  transport).
+- **`src/tools.ts`** — tools as plain functions (smoke-testable). `add_image_from_file`
+  reads a local file → mints a presigned URL → `PUT`s bytes → attaches.
 - **`src/index.ts`** — registers the tools as MCP tools over **stdio**
   (diagnostics → stderr, protocol → stdout).
 
 ## Adding a tool
 
 1. Add `async function fooBar(api, args)` in `src/tools.ts` (use `api.get(...)`
-   or `api.request(...)`).
+   or `api.request(...)`, which proxy through `/mcp`).
 2. Register it in `src/index.ts` with a Zod `inputSchema`.
 3. Add it to `scripts/smoke.ts` if it's a GET.
 

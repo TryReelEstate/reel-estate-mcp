@@ -1,7 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { basename } from "node:path";
 import { ApiClient, type HttpMethod } from "./api-client.js";
-import { ClerkSession } from "./clerk-session.js";
 import { CATALOG } from "./catalog.js";
 import { getConfig } from "./config.js";
 
@@ -12,18 +11,13 @@ import { getConfig } from "./config.js";
  * `apiRequest` is the general escape hatch that can hit any route.
  */
 
-export async function whoami(session: ClerkSession, api: ApiClient) {
-  const { apiBaseUrl, user, readOnly } = getConfig();
-  // Call the API first so the session is established before we read identity
-  // (otherwise sessionId reads as null on the very first call).
+export async function whoami(api: ApiClient) {
+  const { mcpServerUrl, readOnly } = getConfig();
   const profile = await api.get("/users/profile");
-  const identity = await session.identity();
   return {
-    configuredUser: user,
-    clerkUserId: identity.clerkUserId,
-    sessionId: identity.sessionId,
-    apiBaseUrl,
+    mcpServerUrl,
     readOnly,
+    authenticated: profile.ok,
     profileStatus: profile.status,
     profile: profile.data,
   };
@@ -79,7 +73,7 @@ export async function listMovies(api: ApiClient, args: { projectId?: string }) {
 }
 
 export function listEndpoints() {
-  return { apiBaseUrl: getConfig().apiBaseUrl, groups: CATALOG };
+  return { mcpServerUrl: getConfig().mcpServerUrl, groups: CATALOG };
 }
 
 export async function apiRequest(

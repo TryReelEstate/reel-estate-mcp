@@ -1,5 +1,5 @@
 import { getConfig } from "./config.js";
-import { ClerkSession } from "./clerk-session.js";
+import { callApiRequest } from "./upstream.js";
 
 export type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
@@ -20,26 +20,13 @@ export interface ApiResponse {
 }
 
 /**
- * Thin authenticated HTTP client for the Reel Estate API. Injects a fresh
- * Clerk bearer token on every call and unwraps JSON. Never throws on non-2xx —
- * the status + parsed body are returned so the model can see API error shapes
- * ({ error: { code, message } }).
+ * API client that proxies every call through the backend's `/mcp` `api_request`
+ * tool (see upstream.ts) instead of hitting REST directly. Auth lives entirely
+ * in the upstream OAuth connection — there are no tokens or secrets here. The
+ * tool functions in tools.ts are unchanged: they still see the same
+ * `{ status, ok, url, method, data }` shape and never throw on non-2xx.
  */
 export class ApiClient {
-  constructor(private readonly session: ClerkSession) {}
-
-  private buildUrl(path: string, query?: ApiRequest["query"]): string {
-    const { apiBaseUrl } = getConfig();
-    const clean = path.replace(/^\/+/, "");
-    const url = new URL(`${apiBaseUrl}/${clean}`);
-    if (query) {
-      for (const [k, v] of Object.entries(query)) {
-        if (v !== undefined) url.searchParams.set(k, String(v));
-      }
-    }
-    return url.toString();
-  }
-
   async request(req: ApiRequest): Promise<ApiResponse> {
     const { readOnly } = getConfig();
     if (readOnly && req.method !== "GET") {
@@ -49,33 +36,24 @@ export class ApiClient {
       );
     }
 
-    const url = this.buildUrl(req.path, req.query);
-    const token = await this.session.getToken();
-
-    const headers: Record<string, string> = {
-      Authorization: `Bearer ${token}`,
-      Accept: "application/json",
-    };
-    let bodyInit: string | undefined;
-    if (req.body !== undefined && req.method !== "GET") {
-      headers["Content-Type"] = "application/json";
-      bodyInit = JSON.stringify(req.body);
-    }
-
-    const res = await fetch(url, { method: req.method, headers, body: bodyInit });
-
-    const text = await res.text();
-    let data: unknown = text;
-    const contentType = res.headers.get("content-type") ?? "";
-    if (contentType.includes("application/json") && text) {
-      try {
-        data = JSON.parse(text);
-      } catch {
-        data = text;
+    // Drop undefined query values so we don't send "undefined" strings upstream.
+    let query: Record<string, string | number | boolean> | undefined;
+    if (req.query) {
+      query = {};
+      for (const [k, v] of Object.entries(req.query)) {
+        if (v !== undefined) query[k] = v;
       }
     }
 
-    return { status: res.status, ok: res.ok, url, method: req.method, data };
+    const res = await callApiRequest({ method: req.method, path: req.path, query, body: req.body });
+
+    // The upstream `api_request` summary is `{ status, ok, request: "GET <url>", data }`.
+    const requestStr = typeof res.request === "string" ? res.request : `${req.method} ${req.path}`;
+    const sep = requestStr.indexOf(" ");
+    const method = (sep > 0 ? requestStr.slice(0, sep) : req.method) as HttpMethod;
+    const url = sep > 0 ? requestStr.slice(sep + 1) : req.path;
+
+    return { status: res.status, ok: res.ok, url, method, data: res.data };
   }
 
   get(path: string, query?: ApiRequest["query"]) {
