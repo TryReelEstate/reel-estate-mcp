@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+import { basename } from "node:path";
 import { ApiClient, type HttpMethod } from "./api-client.js";
 import { ClerkSession } from "./clerk-session.js";
 import { CATALOG } from "./catalog.js";
@@ -95,6 +97,72 @@ export async function apiRequest(
 }
 
 /** Surface HTTP status alongside the body so error envelopes are visible. */
+const MIME_BY_EXT: Record<string, string> = {
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".png": "image/png",
+  ".webp": "image/webp",
+  ".gif": "image/gif",
+};
+
+function mimeFromName(name: string): string {
+  const dot = name.lastIndexOf(".");
+  const ext = dot >= 0 ? name.slice(dot).toLowerCase() : "";
+  return MIME_BY_EXT[ext] ?? "image/jpeg";
+}
+
+/**
+ * Add a photo to a project from a LOCAL file — the passthrough the embedded
+ * (remote) MCP can't do, since it has neither the user's filesystem nor a way
+ * to move bytes that don't fit in the model's token budget. Three steps, none
+ * of which need storage credentials:
+ *   1. POST /projects/:id/images/upload-url  -> presigned S3 PUT URL + publicUrl
+ *   2. PUT the file bytes straight to that URL (the signed URL IS the capability)
+ *   3. POST /projects/:id/images { url, s3Key } -> attach (limit check, vision, SSE)
+ */
+export async function addImageFromFile(
+  api: ApiClient,
+  args: { projectId: string; path: string; caption?: string; filename?: string },
+) {
+  const buffer = await readFile(args.path);
+  const name = args.filename ?? basename(args.path);
+  const contentType = mimeFromName(name);
+
+  // 1. Mint a presigned upload URL (authenticated as the user; no storage creds).
+  const minted = await api.request({
+    method: "POST",
+    path: `/projects/${encodeURIComponent(args.projectId)}/images/upload-url`,
+    body: { filename: name, contentType },
+  });
+  if (!minted.ok) return summarize(minted); // surface the API error envelope as-is
+  const slot = (minted.data as { data?: { uploadUrl?: string; publicUrl?: string; s3Key?: string } })?.data;
+  if (!slot?.uploadUrl || !slot.publicUrl || !slot.s3Key) {
+    throw new Error(
+      `upload-url response missing fields: ${JSON.stringify(minted.data).slice(0, 200)}`,
+    );
+  }
+
+  // 2. PUT bytes directly to S3. Deliberately NO Authorization header — the
+  //    presigned URL carries its own signature; an extra header would break it.
+  const put = await fetch(slot.uploadUrl, {
+    method: "PUT",
+    headers: { "Content-Type": contentType },
+    body: buffer,
+  });
+  if (!put.ok) {
+    const detail = await put.text().catch(() => "");
+    throw new Error(`Direct S3 upload failed: HTTP ${put.status} ${detail.slice(0, 200)}`);
+  }
+
+  // 3. Attach the uploaded object to the project.
+  const attach = await api.request({
+    method: "POST",
+    path: `/projects/${encodeURIComponent(args.projectId)}/images`,
+    body: { url: slot.publicUrl, s3Key: slot.s3Key, caption: args.caption },
+  });
+  return summarize(attach);
+}
+
 function summarize(res: { status: number; ok: boolean; method: string; url: string; data: unknown }) {
   return {
     status: res.status,

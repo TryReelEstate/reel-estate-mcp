@@ -16,6 +16,7 @@ import {
   listMovies,
   listEndpoints,
   apiRequest,
+  addImageFromFile,
 } from "./tools.js";
 
 /**
@@ -200,6 +201,31 @@ server.registerTool(
   async () => {
     try {
       return ok(listEndpoints());
+    } catch (e) {
+      return fail(e);
+    }
+  },
+);
+
+server.registerTool(
+  "add_image_from_file",
+  {
+    title: "Add a photo to a project from a local file",
+    description:
+      "Upload a LOCAL image file to a project. Reads the file, mints a presigned S3 URL " +
+      "(POST /projects/:id/images/upload-url), PUTs the bytes straight to storage (no credentials " +
+      "needed), then attaches it (POST /projects/:id/images). This is the credential-less upload path " +
+      "the remote MCP can't do. Image aspect ratio must be between 0.5:1 and 2:1. Blocked in read-only mode.",
+    inputSchema: {
+      projectId: z.string().describe("Target project id."),
+      path: z.string().describe("Absolute path to a local image file (jpg/png/webp)."),
+      caption: z.string().optional().describe("Optional caption stored with the image."),
+      filename: z.string().optional().describe("Override the stored filename (defaults to the file's basename)."),
+    },
+  },
+  async (args) => {
+    try {
+      return ok(await addImageFromFile(api, args));
     } catch (e) {
       return fail(e);
     }

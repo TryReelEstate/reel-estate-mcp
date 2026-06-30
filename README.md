@@ -62,6 +62,7 @@ curl https://<api-host>/health      # → {"status":"ok","environment":"staging"
 | `list_movies` | `GET /movies` or `GET /movies/project/:projectId` |
 | `list_voices` | `GET /voices` |
 | `get_usage` | `GET /billing/usage` |
+| `add_image_from_file` | upload a **local** image file to a project — presigned `PUT` to storage, then attach (no storage creds) |
 | `list_endpoints` | the curated API catalog (so you know what `api_request` can call) |
 | `api_request` | **any** route, any method — the escape hatch that covers the whole API |
 
