@@ -194,9 +194,9 @@ async function revokeToken(mcpServerUrl: string, token: string, clientId: string
 
 /**
  * Log out: best-effort revoke the cached token server-side, clear the local
- * session (tokens + PKCE verifier), and drop the in-memory connection so the
- * next tool call re-authorizes via the browser. The DCR client registration is
- * kept (app-level, not per-user).
+ * session (tokens + PKCE verifier + DCR client registration), and drop the
+ * in-memory connection so the next tool call re-authorizes via the browser with
+ * a fresh client registration.
  */
 export async function logout(): Promise<{ clearedTokens: boolean; revoked: boolean; note?: string }> {
   const cfg = getConfig();
