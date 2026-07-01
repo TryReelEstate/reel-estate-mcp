@@ -15,6 +15,7 @@ import {
   getUsage,
   listMovies,
   listEndpoints,
+  help,
   apiRequest,
   addImageFromFile,
   resolveAddress,
@@ -233,6 +234,25 @@ server.registerTool(
   async () => {
     try {
       return ok(await getUsage(api));
+    } catch (e) {
+      return fail(e);
+    }
+  },
+);
+
+server.registerTool(
+  "help",
+  {
+    title: "How to use this server (start-to-finish walkthrough)",
+    description:
+      "Guided, numbered walkthrough of the whole pipeline — sign in → create a project → add photos → " +
+      "edit → animate clips → add music/voiceover/overlays → arrange → render — with example args and " +
+      "the gotchas (async polling, paid gating). Call this first if you're not sure where to start.",
+    inputSchema: {},
+  },
+  async () => {
+    try {
+      return ok(help());
     } catch (e) {
       return fail(e);
     }
@@ -553,6 +573,33 @@ server.registerTool(
     } catch (e) {
       return fail(e);
     }
+  },
+);
+
+// Prompt = the idiomatic MCP "skill": clients surface it as a reusable
+// slash-command/template. Reuses the same walkthrough as the `help` tool so the
+// two never drift.
+server.registerPrompt(
+  "getting_started",
+  {
+    title: "Getting started: create a listing movie",
+    description: "Start-to-finish walkthrough from sign-in to a rendered movie.",
+  },
+  () => {
+    const h = help();
+    const text = [
+      h.overview,
+      "",
+      h.firstTime,
+      "",
+      ...h.steps.map((s) => `${s.n}. **${s.title}** — ${s.do}\n   tools: ${s.tools.join(", ")}`),
+      "",
+      "Notes:",
+      ...h.notes.map((n) => `- ${n}`),
+    ].join("\n");
+    return {
+      messages: [{ role: "user" as const, content: { type: "text" as const, text } }],
+    };
   },
 );
 

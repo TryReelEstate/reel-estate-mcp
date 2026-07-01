@@ -106,6 +106,112 @@ export function listEndpoints() {
   return { mcpServerUrl: getConfig().mcpServerUrl, groups: CATALOG };
 }
 
+/**
+ * Guided, start-to-finish walkthrough of the whole pipeline (auth → project →
+ * photos → edits → clips → audio/overlays → arrange → render). Returns a
+ * numbered plan the assistant can follow step by step, plus the gotchas
+ * (async polling, paid gating). Read-only; safe to call any time.
+ */
+export function help() {
+  return {
+    overview:
+      "Drive the Reel Estate product end to end: create a project for a listing, add photos, " +
+      "optionally edit them (staging/twilight/etc.), animate them into clips, lay in music/voiceover " +
+      "and image/text overlays, arrange the timeline, then render the final movie.",
+    firstTime:
+      "Your first tool call opens a browser to sign in (or call `login`). Then call `whoami` — if " +
+      "canWrite is false you're on a free plan (read-only over the MCP) and creating/generating is " +
+      "blocked until you upgrade.",
+    steps: [
+      {
+        n: 1,
+        title: "Sign in & confirm access",
+        tools: ["login", "whoami"],
+        do: "Authenticate, then check whoami.canWrite. Free plans can browse but not create/generate.",
+      },
+      {
+        n: 2,
+        title: "Create a project for the listing",
+        tools: ["resolve_address", "api_request"],
+        do:
+          "resolve_address to geocode the street address and pick a candidate (prefer isStreetLevel), " +
+          "then create the project.",
+        example: {
+          resolve_address: { query: "1026 Amberley Crossing Dr, Belmont NC 28012" },
+          create: { method: "POST", path: "/projects", body: { name: "1026 Amberley Crossing Dr", address: "<chosen candidate>" } },
+        },
+      },
+      {
+        n: 3,
+        title: "Add photos",
+        tools: ["add_image_from_file"],
+        do:
+          "Upload local image files (presigned, no storage creds). addToTimeline defaults true so each " +
+          "photo becomes a video element in the render.",
+        example: { add_image_from_file: { projectId: "<id>", path: "C:/photos/exterior.jpg", caption: "Front exterior" } },
+      },
+      {
+        n: 4,
+        title: "Edit photos (optional)",
+        tools: ["edit_image", "get_project"],
+        do:
+          "Non-destructive versioned edits (staging, twilight, upscale, seasonal, replace/remove/add, " +
+          "manual). Async — poll get_project to see the new active version. The active version is what " +
+          "gets animated/rendered.",
+        example: { edit_image: { projectId: "<id>", imageId: "<id>", editType: "twilight" } },
+      },
+      {
+        n: 5,
+        title: "Animate photos into clips",
+        tools: ["generate_clip", "get_clip_status"],
+        do:
+          "Animate the active version of an image (auto/zoom/orbit/drone/custom). Async — poll " +
+          "get_clip_status with the returned jobId. The finished clip auto-binds to its timeline element.",
+        example: { generate_clip: { projectId: "<id>", imageId: "<id>", motion: "drone", duration: 5 } },
+      },
+      {
+        n: 6,
+        title: "Add music / voiceover / overlays (optional)",
+        tools: ["add_timeline_audio", "add_timeline_overlay", "list_voices"],
+        do:
+          "Place an existing audio URL (music or a generated voiceover) at a point, and overlay a " +
+          "project image/logo or a text caption. Get a voiceover url/durationSec from get_project " +
+          "(project.voiceover / voiceovers[]). list_voices shows TTS voice presets.",
+        example: {
+          add_timeline_audio: { projectId: "<id>", url: "https://.../music.mp3", volume: 0.3 },
+          add_timeline_overlay: { projectId: "<id>", text: "Just Listed", startTime: 0, duration: 3 },
+        },
+      },
+      {
+        n: 7,
+        title: "Arrange the timeline (optional)",
+        tools: ["reorder_timeline", "move_timeline_element", "get_project"],
+        do:
+          "reorder_timeline resequences the clip track (recomputes back-to-back timing); " +
+          "move_timeline_element retimes a single floating audio/overlay element. Element ids come " +
+          "from get_project (timeline.tracks[].elements[].id).",
+        example: { reorder_timeline: { projectId: "<id>", order: ["<elementId2>", "<elementId1>"] } },
+      },
+      {
+        n: 8,
+        title: "Render the movie",
+        tools: ["render_movie", "list_movies"],
+        do:
+          "Assemble the timeline into the final video (clips + music + overlays + auto-injected " +
+          "voiceover). Async — poll list_movies; the finished movie has renderData.status='completed' " +
+          "and a videoUrl. Costs credits + an export.",
+        example: { render_movie: { projectId: "<id>" } },
+      },
+    ],
+    notes: [
+      "Async tools (edit_image, generate_clip, render_movie) return a jobId — poll rather than assume done.",
+      "Writes/generation require a paid plan; reads (list_*, get_project, whoami) work on free.",
+      "MCP-originated generation is bounded by a credit-velocity cap to prevent runaway spend.",
+      "Anything not covered by a convenience tool is reachable via api_request (see list_endpoints).",
+    ],
+  };
+}
+
 export async function apiRequest(
   api: ApiClient,
   args: {
