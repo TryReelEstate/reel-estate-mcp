@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { basename } from "node:path";
+import { randomUUID } from "node:crypto";
 import { ApiClient, type HttpMethod } from "./api-client.js";
 import { CATALOG } from "./catalog.js";
 import { getConfig } from "./config.js";
@@ -312,6 +313,269 @@ export async function renderMovie(
       },
     }),
   );
+}
+
+// ---------------------------------------------------------------------------
+// Timeline editing (audio / overlays / arrangement)
+//
+// The render is driven ENTIRELY by the timeline's tracks — an asset that isn't
+// a timeline element is invisible to it. The UI edits the timeline object and
+// PUTs it back; these tools do the same read-modify-write so non-UI clients can
+// place existing voice tracks, music, images, and text at specific points, and
+// rearrange elements. Audio/overlay/text elements MUST live on `generic` tracks
+// — the render mapper only turns `video` and `generic` track elements into
+// overlays. A full-timeline PUT re-validates every element, so this depends on
+// nothing beyond the already-audited PUT /projects/:id endpoint.
+// ---------------------------------------------------------------------------
+
+interface TimelineElement {
+  id: string;
+  startTime: number;
+  duration: number;
+  transition?: string;
+  videoConfig?: Record<string, unknown>;
+  audioConfig?: Record<string, unknown>;
+  imageConfig?: Record<string, unknown>;
+  textConfig?: Record<string, unknown>;
+  stickerConfig?: Record<string, unknown>;
+  [k: string]: unknown;
+}
+interface TimelineTrack {
+  id: string;
+  type: "video" | "generic" | "watermark";
+  name?: string;
+  elements: TimelineElement[];
+  [k: string]: unknown;
+}
+interface Timeline {
+  tracks: TimelineTrack[];
+  magneticTrackIds?: string[];
+  [k: string]: unknown;
+}
+
+/** The zod timeline validator requires every element duration >= 0.5s. */
+function clampDuration(d?: number): number {
+  const n = typeof d === "number" && Number.isFinite(d) ? d : 5;
+  return Math.max(n, 0.5);
+}
+
+/** Load the project and its timeline (defaulting an empty one) for editing. */
+async function fetchProjectTimeline(
+  api: ApiClient,
+  projectId: string,
+): Promise<{ project: any; timeline: Timeline }> {
+  const res = await api.get(`/projects/${encodeURIComponent(projectId)}`);
+  if (!res.ok) {
+    throw new Error(`Could not load project ${projectId}: HTTP ${res.status}`);
+  }
+  const project = ((res.data as { data?: unknown })?.data ?? res.data) as any;
+  const timeline: Timeline = project?.timeline ?? { tracks: [] };
+  if (!Array.isArray(timeline.tracks)) timeline.tracks = [];
+  return { project, timeline };
+}
+
+/** PUT just the timeline back — narrow body keeps the blast radius small. */
+async function saveTimeline(api: ApiClient, projectId: string, timeline: Timeline) {
+  return api.request({
+    method: "PUT",
+    path: `/projects/${encodeURIComponent(projectId)}`,
+    body: { timeline },
+  });
+}
+
+/** Find (or lazily create) a named generic track for overlays/audio layers. */
+function findOrCreateGenericTrack(timeline: Timeline, name: string): TimelineTrack {
+  let track = timeline.tracks.find((t) => t.type === "generic" && t.name === name);
+  if (!track) {
+    track = { id: randomUUID(), type: "generic", name, elements: [] };
+    timeline.tracks.push(track);
+  }
+  if (!Array.isArray(track.elements)) track.elements = [];
+  return track;
+}
+
+/** Sum of the video track's element durations — the movie length in seconds. */
+function totalVideoDuration(timeline: Timeline): number {
+  const v = timeline.tracks.find((t) => t.type === "video");
+  return (v?.elements ?? []).reduce((s, e) => s + (e.duration || 0), 0);
+}
+
+function findElement(
+  timeline: Timeline,
+  elementId: string,
+): { track: TimelineTrack; element: TimelineElement } | null {
+  for (const track of timeline.tracks) {
+    const element = (track.elements ?? []).find((e) => e.id === elementId);
+    if (element) return { track, element };
+  }
+  return null;
+}
+
+/**
+ * Place an EXISTING audio asset (a generated voiceover, a music track, any audio
+ * URL) on the timeline at a specific point. Lives on a generic "Audio" track so
+ * the render maps it to a SoundOverlay. duration defaults to the full movie
+ * length (good for background music); pass sourceDuration for a fixed clip like
+ * a voiceover. Get a voiceover's url/durationSec from get_project (project
+ * .voiceover / .voiceovers[]); music can be any public URL.
+ */
+export async function addTimelineAudio(
+  api: ApiClient,
+  args: {
+    projectId: string;
+    url: string;
+    startTime?: number;
+    duration?: number;
+    volume?: number;
+    fadeIn?: number;
+    fadeOut?: number;
+    title?: string;
+    s3Key?: string;
+    sourceDuration?: number;
+  },
+) {
+  const { timeline } = await fetchProjectTimeline(api, args.projectId);
+  const track = findOrCreateGenericTrack(timeline, "Audio");
+  const duration = clampDuration(
+    args.duration ?? args.sourceDuration ?? (totalVideoDuration(timeline) || 5),
+  );
+  track.elements.push({
+    id: randomUUID(),
+    startTime: args.startTime ?? 0,
+    duration,
+    audioConfig: {
+      url: args.url,
+      ...(args.s3Key ? { s3Key: args.s3Key } : {}),
+      volume: args.volume ?? 1,
+      ...(args.fadeIn !== undefined ? { fadeIn: args.fadeIn } : {}),
+      ...(args.fadeOut !== undefined ? { fadeOut: args.fadeOut } : {}),
+      ...(args.title ? { title: args.title } : {}),
+      ...(args.sourceDuration !== undefined ? { sourceDuration: args.sourceDuration } : {}),
+    },
+  });
+  return summarize(await saveTimeline(api, args.projectId, timeline));
+}
+
+/**
+ * Place an EXISTING image/logo OR a text caption on the timeline as an overlay
+ * at a specific point. Image source is either an imageId already in the project
+ * (url auto-resolved) or a direct url; pass `text` instead for a text overlay.
+ * Lives on a generic "Overlays" track so the render maps it to an Image/Text
+ * overlay. Position is percent-of-canvas (0-100) from the top-left.
+ */
+export async function addTimelineOverlay(
+  api: ApiClient,
+  args: {
+    projectId: string;
+    imageId?: string;
+    url?: string;
+    s3Key?: string;
+    text?: string;
+    fontColor?: string;
+    fontSize?: number;
+    startTime?: number;
+    duration?: number;
+    position?: { x: number; y: number };
+    opacity?: number;
+    size?: number;
+  },
+) {
+  const { project, timeline } = await fetchProjectTimeline(api, args.projectId);
+  const track = findOrCreateGenericTrack(timeline, "Overlays");
+  const element: TimelineElement = {
+    id: randomUUID(),
+    startTime: args.startTime ?? 0,
+    duration: clampDuration(args.duration ?? 5),
+  };
+
+  if (args.text) {
+    element.textConfig = {
+      text: args.text,
+      ...(args.position ? { position: args.position } : {}),
+      // style is all-or-nothing in the validator, so populate sane defaults.
+      style: {
+        fontSize: args.fontSize ?? 32,
+        fontFamily: "Arial",
+        fontColor: args.fontColor ?? "#FFFFFF",
+        ...(args.opacity !== undefined ? { opacity: args.opacity } : {}),
+      },
+    };
+  } else {
+    let url = args.url;
+    let s3Key = args.s3Key;
+    if (!url && args.imageId) {
+      const img = ((project.images ?? []) as Array<{ _id?: string; url?: string; s3Key?: string }>).find(
+        (i) => String(i._id) === args.imageId,
+      );
+      if (!img) throw new Error(`Image ${args.imageId} not found in project ${args.projectId}.`);
+      url = img.url;
+      s3Key = img.s3Key;
+    }
+    if (!url) throw new Error("Provide one of: imageId, url, or text for the overlay.");
+    element.imageConfig = {
+      url,
+      ...(s3Key ? { s3Key } : {}),
+      ...(args.position ? { position: args.position } : {}),
+      ...(args.size !== undefined ? { size: args.size } : {}),
+      ...(args.opacity !== undefined ? { opacity: args.opacity } : {}),
+    };
+  }
+
+  track.elements.push(element);
+  return summarize(await saveTimeline(api, args.projectId, timeline));
+}
+
+/**
+ * Retime a single timeline element (any track) — change when it starts and/or
+ * how long it lasts. Use for nudging a floating audio/overlay element to a new
+ * point. For resequencing the whole video track, use reorder_timeline instead.
+ */
+export async function moveTimelineElement(
+  api: ApiClient,
+  args: { projectId: string; elementId: string; startTime?: number; duration?: number },
+) {
+  const { timeline } = await fetchProjectTimeline(api, args.projectId);
+  const found = findElement(timeline, args.elementId);
+  if (!found) throw new Error(`Timeline element ${args.elementId} not found in project ${args.projectId}.`);
+  if (args.startTime !== undefined) found.element.startTime = args.startTime;
+  if (args.duration !== undefined) found.element.duration = clampDuration(args.duration);
+  return summarize(await saveTimeline(api, args.projectId, timeline));
+}
+
+/**
+ * Reorder the elements of a track (defaults to the video track) and recompute
+ * sequential startTimes so they play back-to-back in the given order. Pass the
+ * element ids in the desired order; any elements you omit keep their relative
+ * order and are appended after. This is the "rearrange the clips" operation.
+ */
+export async function reorderTimeline(
+  api: ApiClient,
+  args: { projectId: string; order: string[]; trackId?: string; gap?: number },
+) {
+  const { timeline } = await fetchProjectTimeline(api, args.projectId);
+  const track = args.trackId
+    ? timeline.tracks.find((t) => t.id === args.trackId)
+    : timeline.tracks.find((t) => t.type === "video");
+  if (!track) throw new Error(args.trackId ? `Track ${args.trackId} not found.` : "No video track to reorder.");
+
+  const byId = new Map(track.elements.map((e) => [e.id, e]));
+  const reordered: TimelineElement[] = [];
+  for (const id of args.order) {
+    const e = byId.get(id);
+    if (!e) throw new Error(`Element ${id} is not on the target track.`);
+    reordered.push(e);
+  }
+  // Keep any elements the caller didn't mention, in their existing order.
+  for (const e of track.elements) if (!args.order.includes(e.id)) reordered.push(e);
+
+  const gap = args.gap ?? 0;
+  let t = 0;
+  for (const e of reordered) {
+    e.startTime = t;
+    t += (e.duration || 0) + gap;
+  }
+  track.elements = reordered;
+  return summarize(await saveTimeline(api, args.projectId, timeline));
 }
 
 function summarize(res: { status: number; ok: boolean; method: string; url: string; data: unknown }) {

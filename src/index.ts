@@ -22,6 +22,10 @@ import {
   getClipStatus,
   editImage,
   renderMovie,
+  addTimelineAudio,
+  addTimelineOverlay,
+  moveTimelineElement,
+  reorderTimeline,
 } from "./tools.js";
 
 /**
@@ -406,6 +410,120 @@ server.registerTool(
   async (args) => {
     try {
       return ok(await renderMovie(api, args));
+    } catch (e) {
+      return fail(e);
+    }
+  },
+);
+
+server.registerTool(
+  "add_timeline_audio",
+  {
+    title: "Add an audio track to the timeline",
+    description:
+      "Place an EXISTING audio asset (a generated voiceover, a music track, any audio URL) on the " +
+      "timeline at a specific point so it's in the render. duration defaults to the full movie length " +
+      "(ideal for background music); pass sourceDuration for a fixed clip like a voiceover. Get a " +
+      "voiceover url/durationSec from get_project (project.voiceover / voiceovers[]). Blocked in read-only mode.",
+    inputSchema: {
+      projectId: z.string(),
+      url: z.string().url().describe("Public URL to the audio file (mp3)."),
+      startTime: z.number().min(0).optional().describe("Seconds from the start of the movie. Default 0."),
+      duration: z.number().min(0.5).optional().describe("Seconds. Defaults to movie length, else sourceDuration, else 5."),
+      volume: z.number().min(0).max(1).optional().describe("0-1. Default 1."),
+      fadeIn: z.number().min(0).optional(),
+      fadeOut: z.number().min(0).optional(),
+      title: z.string().optional().describe("Display label for the timeline clip."),
+      s3Key: z.string().optional(),
+      sourceDuration: z.number().min(0).optional().describe("Full length of the source audio, for a fixed-length clip."),
+    },
+  },
+  async (args) => {
+    try {
+      return ok(await addTimelineAudio(api, args));
+    } catch (e) {
+      return fail(e);
+    }
+  },
+);
+
+server.registerTool(
+  "add_timeline_overlay",
+  {
+    title: "Add an image/logo or text overlay to the timeline",
+    description:
+      "Overlay an EXISTING image/logo OR a text caption on the timeline at a specific point. For an image, " +
+      "pass imageId (already in the project — url auto-resolved) or a direct url; for text, pass `text`. " +
+      "position is percent-of-canvas (0-100) from the top-left. Blocked in read-only mode.",
+    inputSchema: {
+      projectId: z.string(),
+      imageId: z.string().optional().describe("Project image id to overlay (url auto-resolved)."),
+      url: z.string().url().optional().describe("Direct image url (alternative to imageId)."),
+      s3Key: z.string().optional(),
+      text: z.string().max(200).optional().describe("Text caption — provide instead of an image for a text overlay."),
+      fontColor: z.string().optional().describe("Text color, e.g. #FFFFFF. Text overlays only."),
+      fontSize: z.number().positive().optional().describe("Text size in px. Text overlays only."),
+      startTime: z.number().min(0).optional().describe("Seconds from the start of the movie. Default 0."),
+      duration: z.number().min(0.5).optional().describe("Seconds on screen. Default 5."),
+      position: z
+        .object({ x: z.number().min(0).max(100), y: z.number().min(0).max(100) })
+        .optional()
+        .describe("Percent-of-canvas position from top-left."),
+      opacity: z.number().min(0).max(1).optional(),
+      size: z.number().min(0).max(1).optional().describe("Image scale factor 0-1. Image overlays only."),
+    },
+  },
+  async (args) => {
+    try {
+      return ok(await addTimelineOverlay(api, args));
+    } catch (e) {
+      return fail(e);
+    }
+  },
+);
+
+server.registerTool(
+  "move_timeline_element",
+  {
+    title: "Retime a timeline element",
+    description:
+      "Change when a single timeline element starts and/or how long it lasts (any track). Use to nudge a " +
+      "floating audio/overlay element to a new point. To resequence all clips, use reorder_timeline. " +
+      "Element ids come from get_project (timeline.tracks[].elements[].id). Blocked in read-only mode.",
+    inputSchema: {
+      projectId: z.string(),
+      elementId: z.string(),
+      startTime: z.number().min(0).optional().describe("New start, seconds from the movie start."),
+      duration: z.number().min(0.5).optional().describe("New duration in seconds."),
+    },
+  },
+  async (args) => {
+    try {
+      return ok(await moveTimelineElement(api, args));
+    } catch (e) {
+      return fail(e);
+    }
+  },
+);
+
+server.registerTool(
+  "reorder_timeline",
+  {
+    title: "Reorder timeline elements",
+    description:
+      "Rearrange a track's elements (defaults to the video/clip track) into the given order and recompute " +
+      "sequential startTimes so they play back-to-back. Pass element ids in the desired order; omitted " +
+      "elements keep their relative order and are appended after. Ids come from get_project. Blocked in read-only mode.",
+    inputSchema: {
+      projectId: z.string(),
+      order: z.array(z.string()).min(1).describe("Element ids in the desired playback order."),
+      trackId: z.string().optional().describe("Track to reorder. Defaults to the video track."),
+      gap: z.number().min(0).optional().describe("Seconds of gap to insert between elements. Default 0."),
+    },
+  },
+  async (args) => {
+    try {
+      return ok(await reorderTimeline(api, args));
     } catch (e) {
       return fail(e);
     }
