@@ -1,7 +1,11 @@
 import http from "node:http";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
+import {
+  UnauthorizedError,
+  discoverOAuthProtectedResourceMetadata,
+  discoverAuthorizationServerMetadata,
+} from "@modelcontextprotocol/sdk/client/auth.js";
 import { getConfig } from "./config.js";
 import { FileOAuthProvider, openBrowser } from "./oauth.js";
 
@@ -168,4 +172,60 @@ export async function close(): Promise<void> {
   } catch {
     /* best-effort */
   }
+}
+
+/** Best-effort RFC 7009 token revocation at the discovered auth server. */
+async function revokeToken(mcpServerUrl: string, token: string, clientId: string): Promise<boolean> {
+  const resource = await discoverOAuthProtectedResourceMetadata(mcpServerUrl);
+  const authServer = resource?.authorization_servers?.[0];
+  if (!authServer) return false;
+  const meta = await discoverAuthorizationServerMetadata(authServer);
+  // The SDK's metadata type omits revocation_endpoint, but Clerk (and RFC 8414)
+  // provide it; read it through a cast.
+  const endpoint = (meta as { revocation_endpoint?: string } | undefined)?.revocation_endpoint;
+  if (!endpoint) return false;
+  const res = await fetch(endpoint, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ token, client_id: clientId }),
+  });
+  return res.ok; // RFC 7009 returns 200 even if the token was already invalid
+}
+
+/**
+ * Log out: best-effort revoke the cached token server-side, clear the local
+ * session (tokens + PKCE verifier), and drop the in-memory connection so the
+ * next tool call re-authorizes via the browser. The DCR client registration is
+ * kept (app-level, not per-user).
+ */
+export async function logout(): Promise<{ clearedTokens: boolean; revoked: boolean; note?: string }> {
+  const cfg = getConfig();
+  const provider = new FileOAuthProvider(cfg.oauthStoreDir, cfg.redirectUrl, cfg.scope, () => {});
+
+  let revoked = false;
+  let note: string | undefined;
+  try {
+    const tokens = await provider.tokens();
+    const info = (await provider.clientInformation()) as { client_id?: string } | undefined;
+    const token = tokens?.refresh_token ?? tokens?.access_token;
+    if (token && info?.client_id) {
+      revoked = await revokeToken(cfg.mcpServerUrl, token, info.client_id);
+    }
+  } catch (err) {
+    note = `server-side revocation skipped: ${err instanceof Error ? err.message : String(err)}`;
+  }
+
+  await provider.clearSession();
+
+  if (clientPromise) {
+    try {
+      const client = await clientPromise;
+      await client.close();
+    } catch {
+      /* noop */
+    }
+    clientPromise = null;
+  }
+
+  return { clearedTokens: true, revoked, note };
 }

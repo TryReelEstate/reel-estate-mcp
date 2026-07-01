@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
 import type {
@@ -77,6 +77,16 @@ export class FileOAuthProvider implements OAuthClientProvider {
 
   async saveTokens(tokens: OAuthTokens): Promise<void> {
     await this.writeJson("tokens.json", tokens);
+  }
+
+  /**
+   * Forget the current session (logout). Removes the cached tokens and any
+   * in-flight PKCE verifier, so the next connect re-authorizes. Keeps the DCR
+   * client registration (it's app-level, not per-user) so re-login reuses it.
+   */
+  async clearSession(): Promise<void> {
+    await rm(join(this.storeDir, "tokens.json"), { force: true });
+    await rm(join(this.storeDir, "verifier.txt"), { force: true });
   }
 
   async saveCodeVerifier(verifier: string): Promise<void> {

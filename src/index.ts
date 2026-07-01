@@ -4,7 +4,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { getConfig } from "./config.js";
 import { ApiClient } from "./api-client.js";
-import { close as closeUpstream } from "./upstream.js";
+import { close as closeUpstream, logout as logoutUpstream } from "./upstream.js";
 import {
   whoami,
   listProjects,
@@ -60,6 +60,24 @@ server.registerTool(
   async () => {
     try {
       return ok(await whoami(api));
+    } catch (e) {
+      return fail(e);
+    }
+  },
+);
+
+server.registerTool(
+  "logout",
+  {
+    title: "Log out",
+    description:
+      "Clear the cached OAuth session (and best-effort revoke it server-side) so the next tool call " +
+      "re-authenticates via the browser. Use to switch accounts or reset a broken auth state.",
+    inputSchema: {},
+  },
+  async () => {
+    try {
+      return ok(await logoutUpstream());
     } catch (e) {
       return fail(e);
     }
