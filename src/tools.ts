@@ -199,16 +199,38 @@ export async function generateClip(
     animatableElements?: string[];
   },
 ) {
-  let imageUrl = args.imageUrl;
-  if (!imageUrl) {
-    const proj = await api.get(`/projects/${encodeURIComponent(args.projectId)}`);
-    const images = (proj.data as { data?: { images?: Array<{ _id?: string; url?: string }> } })?.data?.images ?? [];
-    const img = images.find((i) => String(i._id) === args.imageId);
-    if (!img?.url) {
-      throw new Error(`Could not resolve imageUrl: image ${args.imageId} not found in project ${args.projectId}. Pass imageUrl explicitly.`);
-    }
-    imageUrl = img.url;
+  // Resolve from the project so we animate the ACTIVE version (e.g. a twilight
+  // or destaged edit) and bind the clip to it — otherwise a render wouldn't
+  // match this clip to the timeline element and would regenerate.
+  const proj = await api.get(`/projects/${encodeURIComponent(args.projectId)}`);
+  const images =
+    (
+      proj.data as {
+        data?: {
+          images?: Array<{
+            _id?: string;
+            url?: string;
+            activeVersionId?: string;
+            editedVersions?: Array<{ _id?: string; url?: string }>;
+          }>;
+        };
+      }
+    )?.data?.images ?? [];
+  const img = images.find((i) => String(i._id) === args.imageId);
+  if (!img) {
+    throw new Error(`Image ${args.imageId} not found in project ${args.projectId}.`);
   }
+
+  const activeVersionId = args.activeVersionId ?? img.activeVersionId;
+  const activeVersion = activeVersionId
+    ? (img.editedVersions ?? []).find((v) => String(v._id) === String(activeVersionId))
+    : undefined;
+  // Prefer an explicit override, else the active edited version, else the original.
+  const imageUrl = args.imageUrl ?? activeVersion?.url ?? img.url;
+  if (!imageUrl) {
+    throw new Error(`Could not resolve an image URL for ${args.imageId}.`);
+  }
+
   return summarize(
     await api.request({
       method: "POST",
@@ -222,7 +244,7 @@ export async function generateClip(
         aspectRatio: args.aspectRatio,
         resolution: args.resolution,
         customMotionPrompt: args.customMotionPrompt,
-        activeVersionId: args.activeVersionId,
+        activeVersionId,
         animatableElements: args.animatableElements,
       },
     }),
