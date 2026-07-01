@@ -158,6 +158,21 @@ export async function addImageFromFile(
 }
 
 /**
+ * Geocode a free-text address into ranked candidates (formatted, placeId,
+ * location, components). Use before creating a project for a real listing: pass
+ * the chosen candidate as the project `address` so listing facts auto-populate.
+ */
+export async function resolveAddress(api: ApiClient, args: { query: string; limit?: number }) {
+  return summarize(
+    await api.request({
+      method: "POST",
+      path: "/addresses/resolve",
+      body: { query: args.query, ...(args.limit ? { limit: args.limit } : {}) },
+    }),
+  );
+}
+
+/**
  * Animate a still project image into a video clip (Runway Gen-4). Async: returns
  * a jobId — poll with get_clip_status. If imageUrl is omitted it's resolved from
  * the project so the caller only needs projectId + imageId + motion.

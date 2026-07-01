@@ -51,6 +51,7 @@ origin gets `/mcp` appended automatically.
 | `list_clips` | `GET /clips` or `GET /clips/project/:projectId` |
 | `list_movies` | `GET /movies` or `GET /movies/project/:projectId` |
 | `list_voices` | `GET /voices` |
+| `resolve_address` | geocode a free-text address → ranked candidates (for creating real-listing projects) |
 | `add_image_from_file` | upload a **local** image file to a project — presigned `PUT` to storage, then attach (no storage creds) |
 | `generate_clip` | animate a project image into a video clip (Runway); returns a jobId |
 | `get_clip_status` | poll a `generate_clip` job |

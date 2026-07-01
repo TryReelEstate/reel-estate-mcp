@@ -17,6 +17,7 @@ import {
   listEndpoints,
   apiRequest,
   addImageFromFile,
+  resolveAddress,
   generateClip,
   getClipStatus,
   editImage,
@@ -230,6 +231,28 @@ server.registerTool(
   async (args) => {
     try {
       return ok(await addImageFromFile(api, args));
+    } catch (e) {
+      return fail(e);
+    }
+  },
+);
+
+server.registerTool(
+  "resolve_address",
+  {
+    title: "Geocode a free-text address",
+    description:
+      "Resolve a free-text address into ranked candidates (formatted, placeId, location, components). " +
+      "Use before creating a project for a real listing — pass the chosen candidate as the project " +
+      "`address` so listing facts (price/beds/baths) auto-populate. Prefer candidates with isStreetLevel=true.",
+    inputSchema: {
+      query: z.string().min(3),
+      limit: z.number().int().min(1).max(10).optional(),
+    },
+  },
+  async (args) => {
+    try {
+      return ok(await resolveAddress(api, args));
     } catch (e) {
       return fail(e);
     }
