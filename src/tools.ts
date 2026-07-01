@@ -157,6 +157,119 @@ export async function addImageFromFile(
   return summarize(attach);
 }
 
+/**
+ * Animate a still project image into a video clip (Runway Gen-4). Async: returns
+ * a jobId — poll with get_clip_status. If imageUrl is omitted it's resolved from
+ * the project so the caller only needs projectId + imageId + motion.
+ */
+export async function generateClip(
+  api: ApiClient,
+  args: {
+    projectId: string;
+    imageId: string;
+    motion: string;
+    duration?: number;
+    imageUrl?: string;
+    customMotionPrompt?: string;
+    aspectRatio?: string;
+    resolution?: string;
+    activeVersionId?: string;
+    animatableElements?: string[];
+  },
+) {
+  let imageUrl = args.imageUrl;
+  if (!imageUrl) {
+    const proj = await api.get(`/projects/${encodeURIComponent(args.projectId)}`);
+    const images = (proj.data as { data?: { images?: Array<{ _id?: string; url?: string }> } })?.data?.images ?? [];
+    const img = images.find((i) => String(i._id) === args.imageId);
+    if (!img?.url) {
+      throw new Error(`Could not resolve imageUrl: image ${args.imageId} not found in project ${args.projectId}. Pass imageUrl explicitly.`);
+    }
+    imageUrl = img.url;
+  }
+  return summarize(
+    await api.request({
+      method: "POST",
+      path: "/clip-generation/generate-single-clip",
+      body: {
+        projectId: args.projectId,
+        imageId: args.imageId,
+        imageUrl,
+        motion: args.motion,
+        duration: args.duration ?? 5,
+        aspectRatio: args.aspectRatio,
+        resolution: args.resolution,
+        customMotionPrompt: args.customMotionPrompt,
+        activeVersionId: args.activeVersionId,
+        animatableElements: args.animatableElements,
+      },
+    }),
+  );
+}
+
+/** Poll a clip-generation job started by generate_clip. */
+export async function getClipStatus(api: ApiClient, args: { jobId: string }) {
+  return summarize(await api.get(`/clip-generation/clip-status/${encodeURIComponent(args.jobId)}`));
+}
+
+/**
+ * Create a Gemini-powered edit of a project image (staging, twilight, upscale,
+ * seasonal, replace/remove/add, or manual). Non-destructive — adds a new version
+ * under the image. Async: returns a jobId; the version shows up on the image
+ * (see get_project). Costs 1 credit.
+ */
+export async function editImage(
+  api: ApiClient,
+  args: {
+    projectId: string;
+    imageId: string;
+    editType: string;
+    roomType?: string;
+    style?: string;
+    advancedParams?: { target: string; value?: string };
+    customPrompt?: string;
+  },
+) {
+  return summarize(
+    await api.request({
+      method: "POST",
+      path: "/image-editing/edit",
+      body: {
+        projectId: args.projectId,
+        imageId: args.imageId,
+        editType: args.editType,
+        roomType: args.roomType,
+        style: args.style,
+        advancedParams: args.advancedParams,
+        customPrompt: args.customPrompt,
+      },
+    }),
+  );
+}
+
+/**
+ * Render the project's timeline into the final movie (assembles clips, music,
+ * watermark, overlays). Only projectId is required — everything else falls back
+ * to the project's saved settings. Async: returns a jobId; poll list_movies or
+ * /movies/check-status. Costs credits + an export.
+ */
+export async function renderMovie(
+  api: ApiClient,
+  args: { projectId: string; aiGeneratedLabel?: boolean; settings?: Record<string, unknown> },
+) {
+  return summarize(
+    await api.request({
+      method: "POST",
+      path: "/video-generation/generate-full-video",
+      body: {
+        projectId: args.projectId,
+        ...(args.aiGeneratedLabel !== undefined ? { aiGeneratedLabel: args.aiGeneratedLabel } : {}),
+        ...(args.settings ? { settings: args.settings } : {}),
+      },
+    }),
+  );
+}
+
 function summarize(res: { status: number; ok: boolean; method: string; url: string; data: unknown }) {
   return {
     status: res.status,

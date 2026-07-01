@@ -52,6 +52,10 @@ origin gets `/mcp` appended automatically.
 | `list_movies` | `GET /movies` or `GET /movies/project/:projectId` |
 | `list_voices` | `GET /voices` |
 | `add_image_from_file` | upload a **local** image file to a project — presigned `PUT` to storage, then attach (no storage creds) |
+| `generate_clip` | animate a project image into a video clip (Runway); returns a jobId |
+| `get_clip_status` | poll a `generate_clip` job |
+| `edit_image` | Gemini image edit (staging / twilight / upscale / seasonal / replace-remove-add / manual); versioned |
+| `render_movie` | assemble the project timeline into the final movie |
 | `list_endpoints` | the curated API catalog (so you know what `api_request` can call) |
 | `api_request` | **any** route, any method — the escape hatch that covers the whole API |
 

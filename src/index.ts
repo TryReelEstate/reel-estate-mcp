@@ -17,6 +17,10 @@ import {
   listEndpoints,
   apiRequest,
   addImageFromFile,
+  generateClip,
+  getClipStatus,
+  editImage,
+  renderMovie,
 } from "./tools.js";
 
 /**
@@ -226,6 +230,116 @@ server.registerTool(
   async (args) => {
     try {
       return ok(await addImageFromFile(api, args));
+    } catch (e) {
+      return fail(e);
+    }
+  },
+);
+
+server.registerTool(
+  "generate_clip",
+  {
+    title: "Generate a video clip from a project image",
+    description:
+      "Animate one still project image into a video clip (Runway Gen-4). Async — returns a jobId; " +
+      "poll get_clip_status. imageUrl is auto-resolved from the project if omitted. Costs credits.",
+    inputSchema: {
+      projectId: z.string(),
+      imageId: z.string(),
+      motion: z.enum([
+        "auto", "zoom_in", "zoom_out", "no_motion", "orbit", "orbit_left", "orbit_right", "drone", "custom",
+      ]),
+      duration: z.number().min(3).max(10).optional().describe("Seconds, 3-10 (default 5)."),
+      customMotionPrompt: z.string().max(500).optional().describe("Required when motion='custom'."),
+      imageUrl: z.string().url().optional().describe("Auto-resolved from the project if omitted."),
+      aspectRatio: z.string().optional(),
+      resolution: z.string().optional(),
+    },
+  },
+  async (args) => {
+    try {
+      return ok(await generateClip(api, args));
+    } catch (e) {
+      return fail(e);
+    }
+  },
+);
+
+server.registerTool(
+  "get_clip_status",
+  {
+    title: "Check clip generation status",
+    description: "Poll a clip-generation job started by generate_clip (GET /clip-generation/clip-status/:jobId).",
+    inputSchema: { jobId: z.string() },
+  },
+  async ({ jobId }) => {
+    try {
+      return ok(await getClipStatus(api, { jobId }));
+    } catch (e) {
+      return fail(e);
+    }
+  },
+);
+
+server.registerTool(
+  "edit_image",
+  {
+    title: "Edit a project image (Gemini)",
+    description:
+      "Create a non-destructive, versioned edit of a project image. editType: staging/destaging, " +
+      "twilight(+_interior), upscale, green_grass, bright_day, seasonal (winter/halloween/christmas +_interior), " +
+      "advanced replace/remove/add (need advancedParams), or manual (customPrompt). staging needs roomType+style. " +
+      "Async — returns a jobId; the new version appears on the image. Costs 1 credit.",
+    inputSchema: {
+      projectId: z.string(),
+      imageId: z.string(),
+      editType: z.enum([
+        "staging", "destaging", "twilight", "twilight_interior", "replace", "remove", "add",
+        "winter", "halloween", "halloween_interior", "christmas", "christmas_interior",
+        "manual", "green_grass", "bright_day", "upscale",
+      ]),
+      roomType: z.string().optional().describe("Required for staging + advanced/interior edits."),
+      style: z.string().optional().describe("Required for staging."),
+      advancedParams: z
+        .object({ target: z.string(), value: z.string().optional() })
+        .optional()
+        .describe("Required for replace/remove/add."),
+      customPrompt: z.string().optional().describe("Required for editType='manual'."),
+    },
+  },
+  async (args) => {
+    try {
+      return ok(await editImage(api, args));
+    } catch (e) {
+      return fail(e);
+    }
+  },
+);
+
+server.registerTool(
+  "render_movie",
+  {
+    title: "Render the final movie for a project",
+    description:
+      "Assemble the project's timeline into the final video (clips + music + watermark + overlays). Only " +
+      "projectId is required; settings fall back to the project. Async — returns a jobId; poll list_movies. " +
+      "Costs credits and an export.",
+    inputSchema: {
+      projectId: z.string(),
+      aiGeneratedLabel: z.boolean().optional().describe("Per-render override of the AI-disclosure label."),
+      settings: z
+        .object({
+          resolution: z.enum(["720p", "1080p", "4k"]).optional(),
+          aspectRatio: z.enum(["16:9", "9:16", "1:1", "4:5"]).optional(),
+          transitions: z.enum(["none", "fade", "slide", "zoom"]).optional(),
+          duration: z.number().min(3).max(60).optional(),
+        })
+        .optional(),
+    },
+  },
+  async (args) => {
+    try {
+      return ok(await renderMovie(api, args));
     } catch (e) {
       return fail(e);
     }
