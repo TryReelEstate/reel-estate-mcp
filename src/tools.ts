@@ -116,7 +116,7 @@ function mimeFromName(name: string): string {
  */
 export async function addImageFromFile(
   api: ApiClient,
-  args: { projectId: string; path: string; caption?: string; filename?: string },
+  args: { projectId: string; path: string; caption?: string; filename?: string; addToTimeline?: boolean },
 ) {
   const buffer = await readFile(args.path);
   const name = args.filename ?? basename(args.path);
@@ -152,7 +152,14 @@ export async function addImageFromFile(
   const attach = await api.request({
     method: "POST",
     path: `/projects/${encodeURIComponent(args.projectId)}/images`,
-    body: { url: slot.publicUrl, s3Key: slot.s3Key, caption: args.caption },
+    body: {
+      url: slot.publicUrl,
+      s3Key: slot.s3Key,
+      caption: args.caption,
+      // Default on: also append a video timeline element so the image is part of
+      // the render (the whole point of adding it). Pass false to skip.
+      addToTimeline: args.addToTimeline ?? true,
+    },
   });
   return summarize(attach);
 }

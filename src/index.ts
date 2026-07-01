@@ -226,6 +226,10 @@ server.registerTool(
       path: z.string().describe("Absolute path to a local image file (jpg/png/webp)."),
       caption: z.string().optional().describe("Optional caption stored with the image."),
       filename: z.string().optional().describe("Override the stored filename (defaults to the file's basename)."),
+      addToTimeline: z
+        .boolean()
+        .optional()
+        .describe("Also append a video timeline element so the image is in the render. Default true."),
     },
   },
   async (args) => {
