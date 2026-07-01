@@ -15,7 +15,7 @@ async function main() {
     return;
   }
 
-  console.error("A browser should have opened. If not, open this URL to authorize:\n");
+  console.error("Open this URL in a browser to authorize:\n");
   console.error(`  ${result.authorizeUrl}\n`);
   console.error("Waiting for you to approve the sign-in…");
 

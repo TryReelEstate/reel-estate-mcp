@@ -7,7 +7,7 @@ import {
   discoverAuthorizationServerMetadata,
 } from "@modelcontextprotocol/sdk/client/auth.js";
 import { getConfig } from "./config.js";
-import { FileOAuthProvider, openBrowser } from "./oauth.js";
+import { FileOAuthProvider } from "./oauth.js";
 
 /**
  * Maintains ONE connection to the backend's `/mcp`, authenticated as the user
@@ -123,7 +123,10 @@ export async function login(): Promise<{
   const onAuthorize = (url: string) => {
     authorizeUrl = url;
     if (!ref.callback) ref.callback = startCallbackServer(cfg.callbackPort);
-    openBrowser(url); // reliable only from a terminal; harmless otherwise
+    // No auto-open: launching a browser the instant we register the DCR client
+    // races Clerk's propagation — the just-registered client_id can 404 at the
+    // authorize endpoint for a moment, spawning a stray "invalid_client" tab.
+    // The caller opens the returned URL instead (a beat later, after propagation).
   };
 
   const provider = new FileOAuthProvider(cfg.oauthStoreDir, cfg.redirectUrl, cfg.scope, onAuthorize);
@@ -168,8 +171,7 @@ export async function login(): Promise<{
   return {
     status: "authorization_required",
     authorizeUrl,
-    message:
-      "Open this URL in a browser to sign in, then retry your action (a browser may have opened automatically).",
+    message: "Open this URL in a browser to sign in, then retry your action.",
     completion,
   };
 }
