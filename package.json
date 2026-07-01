@@ -18,7 +18,8 @@
     "build": "tsc",
     "typecheck": "tsc --noEmit",
     "smoke": "tsx scripts/smoke.ts",
-    "diag": "tsx scripts/diag-oauth.ts"
+    "diag": "tsx scripts/diag-oauth.ts",
+    "login": "tsx scripts/login.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
