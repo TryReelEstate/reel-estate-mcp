@@ -45,7 +45,18 @@ function startCallbackServer(port: number): { waitForCode: Promise<string>; clos
     }
   });
   // Don't crash the process if the port is busy — surface it via waitForCode.
-  server.on("error", (err) => reject(err));
+  server.on("error", (err: NodeJS.ErrnoException) => {
+    if (err.code === "EADDRINUSE") {
+      reject(
+        new Error(
+          `OAuth callback port ${port} is already in use — another reel-estate-mcp instance is ` +
+            `probably mid-authorization. Kill stale server processes (or set MCP_OAUTH_CALLBACK_PORT) and retry.`,
+        ),
+      );
+    } else {
+      reject(err);
+    }
+  });
   server.listen(port);
 
   return { waitForCode, close: () => { try { server.close(); } catch { /* noop */ } } };
@@ -53,27 +64,47 @@ function startCallbackServer(port: number): { waitForCode: Promise<string>; clos
 
 async function connect(): Promise<Client> {
   const cfg = getConfig();
-  const provider = new FileOAuthProvider(cfg.oauthStoreDir, cfg.redirectUrl, cfg.scope, openBrowser);
-  const transport = new StreamableHTTPClientTransport(new URL(cfg.mcpServerUrl), {
-    authProvider: provider,
-  });
-  const client = new Client({ name: "reel-estate-mcp-bridge", version: "0.3.0" });
 
-  const callback = startCallbackServer(cfg.callbackPort);
+  // Start the loopback callback listener LAZILY — only when the OAuth flow
+  // actually needs the browser (no valid cached token). Binding it eagerly on
+  // every connect hogs the fixed port and collides with any other instance
+  // mid-auth (the EADDRINUSE we hit). When cached tokens work, the port is
+  // never touched.
+  // Held in an object so TypeScript tracks the closure assignment below.
+  const ref: { callback: { waitForCode: Promise<string>; close: () => void } | null } = { callback: null };
+  const onAuthorize = (url: string) => {
+    if (!ref.callback) ref.callback = startCallbackServer(cfg.callbackPort);
+    console.error(`[reel-estate-mcp] authorization required — opening browser (callback ${cfg.redirectUrl})`);
+    openBrowser(url);
+  };
+
+  const provider = new FileOAuthProvider(cfg.oauthStoreDir, cfg.redirectUrl, cfg.scope, onAuthorize);
+  const newTransport = () =>
+    new StreamableHTTPClientTransport(new URL(cfg.mcpServerUrl), { authProvider: provider });
+
+  let client = new Client({ name: "reel-estate-mcp-bridge", version: "0.3.0" });
+  const transport = newTransport();
+
   try {
     try {
       await client.connect(transport);
     } catch (err) {
       if (!(err instanceof UnauthorizedError)) throw err;
-      // First run / expired refresh: the transport has opened the browser via
-      // the provider. Wait for the redirect, exchange the code, then reconnect.
-      console.error(`[reel-estate-mcp] waiting for browser authorization (callback ${cfg.redirectUrl}) ...`);
-      const code = await callback.waitForCode;
-      await transport.finishAuth(code);
-      await client.connect(transport);
+      // The transport has opened the browser via onAuthorize. Wait for the
+      // redirect, exchange the code, then reconnect with the fresh token.
+      if (!ref.callback) {
+        throw new Error("Authorization required but no authorization URL was produced by the provider.");
+      }
+      const code = await ref.callback.waitForCode;
+      await transport.finishAuth(code); // exchanges the code and persists the token
+      // The first transport is already started (and the client already bound to
+      // it), so a second connect() throws "already started". Reconnect with fresh
+      // instances — the token finishAuth just cached makes this succeed silently.
+      client = new Client({ name: "reel-estate-mcp-bridge", version: "0.3.0" });
+      await client.connect(newTransport());
     }
   } finally {
-    callback.close();
+    ref.callback?.close();
   }
 
   console.error(`[reel-estate-mcp] connected to ${cfg.mcpServerUrl}`);
@@ -82,7 +113,14 @@ async function connect(): Promise<Client> {
 
 /** Lazily establish (and memoize) the upstream connection. */
 export function getClient(): Promise<Client> {
-  if (!clientPromise) clientPromise = connect();
+  if (!clientPromise) {
+    // Do NOT cache a rejected promise — otherwise one failed auth bricks the
+    // server until restart (every later tool call replays the same error).
+    clientPromise = connect().catch((err) => {
+      clientPromise = null;
+      throw err;
+    });
+  }
   return clientPromise;
 }
 

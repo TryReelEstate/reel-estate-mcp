@@ -17,7 +17,8 @@
     "start": "tsx src/index.ts",
     "build": "tsc",
     "typecheck": "tsc --noEmit",
-    "smoke": "tsx scripts/smoke.ts"
+    "smoke": "tsx scripts/smoke.ts",
+    "diag": "tsx scripts/diag-oauth.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
