@@ -1,21 +1,27 @@
-import { callTool, close as closeUpstream } from "../src/upstream.js";
+import { login, close as closeUpstream } from "../src/upstream.js";
 
 /**
  * Interactive login. Run in a terminal: `npm run login`.
  *
- * Triggers the OAuth browser flow (which a Claude-launched stdio server can't
- * reliably pop) and caches the token, then exits. After it succeeds, MCP tool
- * calls through your client authenticate silently off the cached token.
+ * Triggers the OAuth browser flow, waits for you to approve, caches the token,
+ * then exits. After it succeeds, MCP tool calls through your client
+ * authenticate silently off the cached token.
  */
 async function main() {
-  console.error("Authorizing… a browser window should open.");
-  console.error("If it doesn't, copy the 'Open this URL to authorize' link printed below into a browser.\n");
+  const result = await login();
 
-  const who = (await callTool("whoami", {})) as { profile?: { data?: { email?: string } } };
+  if (result.status === "authenticated") {
+    console.error(`✅ ${result.message}`);
+    return;
+  }
+
+  console.error("A browser should have opened. If not, open this URL to authorize:\n");
+  console.error(`  ${result.authorizeUrl}\n`);
+  console.error("Waiting for you to approve the sign-in…");
+
+  await result.completion; // resolves once the redirect is caught and the token is cached
 
   console.error("\n✅ Logged in — token cached at ~/.reel-estate-mcp.");
-  const email = who?.profile?.data?.email;
-  if (email) console.error(`   Authenticated as: ${email}`);
   console.error("   MCP tool calls will now authenticate silently. Use the `logout` tool to sign out.");
 }
 

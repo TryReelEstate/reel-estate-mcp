@@ -44,8 +44,9 @@ origin gets `/mcp` appended automatically.
 
 | Tool | Endpoint |
 | --- | --- |
-| `whoami` | `GET /users/profile` + config — **run this first**; first call opens the browser to authorize |
-| `logout` | clear the cached OAuth session (best-effort server revoke) — next call re-authenticates |
+| `whoami` | `GET /users/profile` + config — confirm auth (returns "run login" if not signed in) |
+| `login` | authenticate — returns an authorization URL to open in your browser; token caches in the background |
+| `logout` | clear the cached OAuth session (best-effort server revoke) — next call needs `login` again |
 | `list_projects` | `GET /projects` (paging, sort, search, status) |
 | `get_project` | `GET /projects/:id` |
 | `project_stats` | `GET /projects/stats` |

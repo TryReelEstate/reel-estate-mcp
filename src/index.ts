@@ -4,7 +4,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { getConfig } from "./config.js";
 import { ApiClient } from "./api-client.js";
-import { close as closeUpstream, logout as logoutUpstream } from "./upstream.js";
+import { close as closeUpstream, logout as logoutUpstream, login as loginUpstream } from "./upstream.js";
 import {
   whoami,
   listProjects,
@@ -53,13 +53,34 @@ server.registerTool(
     title: "Who am I",
     description:
       "Show the upstream MCP URL, read-only flag, and the live /users/profile response for the " +
-      "OAuth-authenticated user. Good first call to confirm the browser login worked. The FIRST call " +
-      "may open a browser to authorize.",
+      "OAuth-authenticated user. Good first call to confirm auth. If not signed in, it returns a " +
+      "'run login' error — use the `login` tool.",
     inputSchema: {},
   },
   async () => {
     try {
       return ok(await whoami(api));
+    } catch (e) {
+      return fail(e);
+    }
+  },
+);
+
+server.registerTool(
+  "login",
+  {
+    title: "Log in",
+    description:
+      "Authenticate with the backend. If not already logged in, returns an authorization URL to open in " +
+      "your browser; approve the sign-in and the token is cached in the background, then retry your action. " +
+      "(Browser-based login can't be popped reliably from here, so you click the link.)",
+    inputSchema: {},
+  },
+  async () => {
+    try {
+      const { completion, ...result } = await loginUpstream();
+      void completion; // finishes in the background once the user approves
+      return ok(result);
     } catch (e) {
       return fail(e);
     }

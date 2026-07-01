@@ -68,51 +68,110 @@ function startCallbackServer(port: number): { waitForCode: Promise<string>; clos
 
 async function connect(): Promise<Client> {
   const cfg = getConfig();
+  // Normal tool calls must NEVER trigger an interactive browser flow — a stdio
+  // server launched by a GUI client can't reliably pop one, so it would just
+  // hang. Use the cached token, or fail fast with guidance to run `login`.
+  const provider = new FileOAuthProvider(cfg.oauthStoreDir, cfg.redirectUrl, cfg.scope, () => {});
 
-  // Start the loopback callback listener LAZILY — only when the OAuth flow
-  // actually needs the browser (no valid cached token). Binding it eagerly on
-  // every connect hogs the fixed port and collides with any other instance
-  // mid-auth (the EADDRINUSE we hit). When cached tokens work, the port is
-  // never touched.
-  // Held in an object so TypeScript tracks the closure assignment below.
-  const ref: { callback: { waitForCode: Promise<string>; close: () => void } | null } = { callback: null };
-  const onAuthorize = (url: string) => {
-    if (!ref.callback) ref.callback = startCallbackServer(cfg.callbackPort);
-    console.error(`[reel-estate-mcp] authorization required — opening browser (callback ${cfg.redirectUrl})`);
-    openBrowser(url);
-  };
+  if (!(await provider.tokens())) {
+    throw new Error(
+      "Not authenticated. Run the `login` tool (or `npm run login` in a terminal) to sign in, then retry.",
+    );
+  }
 
-  const provider = new FileOAuthProvider(cfg.oauthStoreDir, cfg.redirectUrl, cfg.scope, onAuthorize);
-  const newTransport = () =>
-    new StreamableHTTPClientTransport(new URL(cfg.mcpServerUrl), { authProvider: provider });
-
-  let client = new Client({ name: "reel-estate-mcp-bridge", version: "0.3.0" });
-  const transport = newTransport();
-
+  const transport = new StreamableHTTPClientTransport(new URL(cfg.mcpServerUrl), { authProvider: provider });
+  const client = new Client({ name: "reel-estate-mcp-bridge", version: "0.3.0" });
   try {
-    try {
-      await client.connect(transport);
-    } catch (err) {
-      if (!(err instanceof UnauthorizedError)) throw err;
-      // The transport has opened the browser via onAuthorize. Wait for the
-      // redirect, exchange the code, then reconnect with the fresh token.
-      if (!ref.callback) {
-        throw new Error("Authorization required but no authorization URL was produced by the provider.");
-      }
-      const code = await ref.callback.waitForCode;
-      await transport.finishAuth(code); // exchanges the code and persists the token
-      // The first transport is already started (and the client already bound to
-      // it), so a second connect() throws "already started". Reconnect with fresh
-      // instances — the token finishAuth just cached makes this succeed silently.
-      client = new Client({ name: "reel-estate-mcp-bridge", version: "0.3.0" });
-      await client.connect(newTransport());
+    // Uses the cached access token; the SDK refreshes it silently if expired.
+    await client.connect(transport);
+  } catch (err) {
+    if (err instanceof UnauthorizedError) {
+      throw new Error(
+        "Session expired or was revoked. Run the `login` tool (or `npm run login`) to sign in again.",
+      );
     }
-  } finally {
-    ref.callback?.close();
+    throw err;
   }
 
   console.error(`[reel-estate-mcp] connected to ${cfg.mcpServerUrl}`);
   return client;
+}
+
+/**
+ * Interactive login. A stdio server can't reliably open a browser and its
+ * stderr isn't visible in a GUI client, so this RETURNS the authorization URL
+ * for the user to open, and finishes the token exchange in the background when
+ * they approve (the loopback catches the redirect). It also best-effort opens a
+ * browser — which works when run from a terminal (`npm run login`), where the
+ * caller can await `completion`.
+ */
+export async function login(): Promise<{
+  status: "authenticated" | "authorization_required";
+  authorizeUrl?: string;
+  message: string;
+  completion?: Promise<void>;
+}> {
+  const cfg = getConfig();
+
+  const probe = new FileOAuthProvider(cfg.oauthStoreDir, cfg.redirectUrl, cfg.scope, () => {});
+  if (await probe.tokens()) {
+    return { status: "authenticated", message: "Already logged in. Use the `logout` tool to switch accounts." };
+  }
+
+  const ref: { callback: { waitForCode: Promise<string>; close: () => void } | null } = { callback: null };
+  let authorizeUrl: string | undefined;
+  const onAuthorize = (url: string) => {
+    authorizeUrl = url;
+    if (!ref.callback) ref.callback = startCallbackServer(cfg.callbackPort);
+    openBrowser(url); // reliable only from a terminal; harmless otherwise
+  };
+
+  const provider = new FileOAuthProvider(cfg.oauthStoreDir, cfg.redirectUrl, cfg.scope, onAuthorize);
+  const transport = new StreamableHTTPClientTransport(new URL(cfg.mcpServerUrl), { authProvider: provider });
+  const client = new Client({ name: "reel-estate-mcp-bridge", version: "0.3.0" });
+
+  try {
+    await client.connect(transport);
+    await client.close().catch(() => {});
+    ref.callback?.close();
+    return { status: "authenticated", message: "Logged in." };
+  } catch (err) {
+    if (!(err instanceof UnauthorizedError) || !ref.callback || !authorizeUrl) {
+      ref.callback?.close();
+      throw err;
+    }
+  }
+
+  const cb = ref.callback;
+  const completion = (async () => {
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("login timed out (no authorization within 5 minutes)")), 300_000);
+    });
+    try {
+      const code = await Promise.race([cb.waitForCode, timeout]);
+      await transport.finishAuth(code); // exchanges the code, persists the token
+      if (clientPromise) {
+        try {
+          (await clientPromise).close();
+        } catch {
+          /* noop */
+        }
+        clientPromise = null;
+      }
+    } finally {
+      if (timer) clearTimeout(timer);
+      cb.close();
+    }
+  })();
+
+  return {
+    status: "authorization_required",
+    authorizeUrl,
+    message:
+      "Open this URL in a browser to sign in, then retry your action (a browser may have opened automatically).",
+    completion,
+  };
 }
 
 /** Lazily establish (and memoize) the upstream connection. */
