@@ -56,8 +56,10 @@ server.registerTool(
   {
     title: "Who am I",
     description:
-      "Show the upstream MCP URL, read-only flag, and the live /users/profile response for the " +
-      "OAuth-authenticated user. Good first call to confirm auth. If not signed in, it returns a " +
+      "Show the upstream MCP URL, read-only flag, the account plan, whether writes are allowed " +
+      "(canWrite) with a plain-language writeAccess reason, and the live /users/profile response for " +
+      "the OAuth-authenticated user. Good first call to confirm auth and whether create/generate/render " +
+      "tools will work (free accounts are read-only over the MCP). If not signed in, it returns a " +
       "'run login' error — use the `login` tool.",
     inputSchema: {},
   },

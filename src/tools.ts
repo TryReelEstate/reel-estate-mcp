@@ -12,14 +12,43 @@ import { getConfig } from "./config.js";
  * `apiRequest` is the general escape hatch that can hit any route.
  */
 
+// Plan gating mirror of the backend's core/security/mcp-access.ts, so this
+// client can explain write access up front instead of only discovering it via a
+// 403 mid-action. Keep the two in sync: free = read-only over the MCP; any other
+// plan can write (legacy starter/professional map to paid tiers).
+const PLAN_ALIASES: Record<string, string> = { starter: "basic", professional: "pro" };
+function isPaidPlan(plan?: string): boolean {
+  if (!plan) return false;
+  const p = PLAN_ALIASES[plan.toLowerCase()] ?? plan.toLowerCase();
+  return p !== "free";
+}
+
 export async function whoami(api: ApiClient) {
   const { mcpServerUrl, readOnly } = getConfig();
   const profile = await api.get("/users/profile");
+  const user = (profile.data as { data?: { subscription?: { plan?: string } } })?.data;
+  const plan = user?.subscription?.plan;
+  const paid = isPaidPlan(plan);
+
+  // Two independent gates can block writes: the server-side paid-plan check
+  // (free accounts are read-only over the MCP) and this client's own read-only
+  // config. Report the effective state and the specific reason.
+  const canWrite = !readOnly && paid;
+  const writeAccess = readOnly
+    ? "This MCP server is running in read-only mode (MCP_READONLY); all writes are disabled locally."
+    : paid
+      ? `Your plan (${plan}) can create, edit, generate, and render via the MCP.`
+      : `Your plan (${plan ?? "free"}) is read-only over the MCP. Creating, editing, generating, or ` +
+        "rendering requires a paid plan — upgrade to enable writes (browsing/read tools still work).";
+
   return {
     mcpServerUrl,
     readOnly,
     authenticated: profile.ok,
     profileStatus: profile.status,
+    plan: plan ?? null,
+    canWrite,
+    writeAccess,
     profile: profile.data,
   };
 }
