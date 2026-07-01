@@ -31,6 +31,13 @@ export interface Config {
   redirectUrl: string;
   /** Optional OAuth scope override; omitted -> negotiated from server metadata. */
   scope?: string;
+  /**
+   * Pre-registered public OAuth client id. When set, the server uses it directly
+   * and SKIPS Dynamic Client Registration (no client.json, no DCR dependency on
+   * the backend). Leave blank to fall back to DCR. Public + PKCE either way, so
+   * there's no secret to distribute.
+   */
+  oauthClientId?: string;
   /** When true, only GET requests are permitted (mutating tools are blocked). */
   readOnly: boolean;
 }
@@ -56,6 +63,7 @@ export function getConfig(): Config {
     callbackPort,
     redirectUrl: `http://localhost:${callbackPort}/callback`,
     scope: process.env.MCP_OAUTH_SCOPE?.trim() || undefined,
+    oauthClientId: process.env.MCP_OAUTH_CLIENT_ID?.trim() || undefined,
     readOnly: /^(1|true|yes)$/i.test(process.env.MCP_READONLY ?? ""),
   };
   return cached;

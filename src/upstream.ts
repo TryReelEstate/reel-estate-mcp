@@ -71,7 +71,7 @@ async function connect(): Promise<Client> {
   // Normal tool calls must NEVER trigger an interactive browser flow — a stdio
   // server launched by a GUI client can't reliably pop one, so it would just
   // hang. Use the cached token, or fail fast with guidance to run `login`.
-  const provider = new FileOAuthProvider(cfg.oauthStoreDir, cfg.redirectUrl, cfg.scope, () => {});
+  const provider = new FileOAuthProvider(cfg.oauthStoreDir, cfg.redirectUrl, cfg.scope, () => {}, cfg.oauthClientId);
 
   if (!(await provider.tokens())) {
     throw new Error(
@@ -113,7 +113,7 @@ export async function login(): Promise<{
 }> {
   const cfg = getConfig();
 
-  const probe = new FileOAuthProvider(cfg.oauthStoreDir, cfg.redirectUrl, cfg.scope, () => {});
+  const probe = new FileOAuthProvider(cfg.oauthStoreDir, cfg.redirectUrl, cfg.scope, () => {}, cfg.oauthClientId);
   if (await probe.tokens()) {
     return { status: "authenticated", message: "Already logged in. Use the `logout` tool to switch accounts." };
   }
@@ -123,13 +123,14 @@ export async function login(): Promise<{
   const onAuthorize = (url: string) => {
     authorizeUrl = url;
     if (!ref.callback) ref.callback = startCallbackServer(cfg.callbackPort);
-    // No auto-open: launching a browser the instant we register the DCR client
-    // races Clerk's propagation — the just-registered client_id can 404 at the
-    // authorize endpoint for a moment, spawning a stray "invalid_client" tab.
-    // The caller opens the returned URL instead (a beat later, after propagation).
+    // No auto-open. On the DCR fallback path, launching a browser the instant we
+    // register the client races Clerk's propagation — the just-registered
+    // client_id can 404 at the authorize endpoint for a moment, spawning a stray
+    // "invalid_client" tab. (With a pre-registered MCP_OAUTH_CLIENT_ID there's no
+    // such race.) Either way, the caller opens the returned URL a beat later.
   };
 
-  const provider = new FileOAuthProvider(cfg.oauthStoreDir, cfg.redirectUrl, cfg.scope, onAuthorize);
+  const provider = new FileOAuthProvider(cfg.oauthStoreDir, cfg.redirectUrl, cfg.scope, onAuthorize, cfg.oauthClientId);
   const transport = new StreamableHTTPClientTransport(new URL(cfg.mcpServerUrl), { authProvider: provider });
   const client = new Client({ name: "reel-estate-mcp-bridge", version: "0.3.0" });
 
@@ -261,7 +262,7 @@ async function revokeToken(mcpServerUrl: string, token: string, clientId: string
  */
 export async function logout(): Promise<{ clearedTokens: boolean; revoked: boolean; note?: string }> {
   const cfg = getConfig();
-  const provider = new FileOAuthProvider(cfg.oauthStoreDir, cfg.redirectUrl, cfg.scope, () => {});
+  const provider = new FileOAuthProvider(cfg.oauthStoreDir, cfg.redirectUrl, cfg.scope, () => {}, cfg.oauthClientId);
 
   let revoked = false;
   let note: string | undefined;

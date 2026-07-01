@@ -45,6 +45,12 @@ export class FileOAuthProvider implements OAuthClientProvider {
     private readonly _redirectUrl: string,
     private readonly scope: string | undefined,
     private readonly onAuthorizeUrl: (url: string) => void,
+    /**
+     * A pre-registered public client id. When provided, the SDK uses it and
+     * never runs Dynamic Client Registration; when undefined, we fall back to
+     * DCR (persisting the registration to client.json).
+     */
+    private readonly staticClientId?: string,
   ) {}
 
   get redirectUrl(): string {
@@ -64,10 +70,16 @@ export class FileOAuthProvider implements OAuthClientProvider {
   }
 
   async clientInformation(): Promise<OAuthClientInformation | undefined> {
+    // A configured client id short-circuits DCR: the SDK sees a known client and
+    // goes straight to authorization. Otherwise use the DCR-persisted client.
+    if (this.staticClientId) return { client_id: this.staticClientId };
     return this.readJson<OAuthClientInformationFull>("client.json");
   }
 
   async saveClientInformation(info: OAuthClientInformationFull): Promise<void> {
+    // With a static client there's nothing to persist (DCR never runs). Guard so
+    // a stray call can't write a client.json that would later shadow the config.
+    if (this.staticClientId) return;
     await this.writeJson("client.json", info);
   }
 

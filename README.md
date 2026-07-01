@@ -18,7 +18,7 @@ straight to storage — something a remote MCP can't do.
 first tool call
    │   StreamableHTTP client ──► backend /mcp  (401, needs auth)
    ▼
-opens your browser ──► Clerk OAuth (DCR + PKCE) ──► you approve
+opens your browser ──► Clerk OAuth (PKCE; DCR optional) ──► you approve
    │                                                   │
    ▼                                                   ▼
 loopback http://localhost:8765/callback?code=…   access + refresh tokens
@@ -33,6 +33,8 @@ every later call:  callTool("api_request", …) over the authed /mcp connection
 - **Prod-capable** — uses the same OAuth the backend already serves at `/mcp`
   (unlike server-side Clerk session minting, which only works on dev instances).
 - **Re-authorize / switch user** — delete the token cache dir and run again.
+- **DCR is optional** — set `MCP_OAUTH_CLIENT_ID` to a pre-registered public
+  client to skip Dynamic Client Registration (recommended). See below.
 
 ### `MCP_SERVER_URL` is the *backend* origin, not the website
 
@@ -116,14 +118,30 @@ npm run smoke          # opens a browser to authorize, then calls a few GETs
 
 ```
 MCP_SERVER_URL=https://<backend-host>   # bare origin → "/mcp" appended
+MCP_OAUTH_CLIENT_ID=                     # optional but recommended (see below); skips DCR
 MCP_OAUTH_CALLBACK_PORT=8765            # optional; loopback port for the redirect
 MCP_OAUTH_STORE_DIR=                    # optional; default ~/.reel-estate-mcp
 MCP_OAUTH_SCOPE=                        # optional; negotiated from metadata if blank
 MCP_READONLY=                           # optional: 1/true blocks non-GET
 ```
 
-> The backend must have **Dynamic Client Registration** enabled in its Clerk
-> dashboard for first-time OAuth to register this client automatically.
+### OAuth client registration (pick one)
+
+**Static client (recommended).** Create a **public** OAuth application once in the
+Clerk dashboard — PKCE, `token_endpoint_auth_method=none`, redirect URI
+`http://localhost:8765/callback` (match `MCP_OAUTH_CALLBACK_PORT`) — and set its
+`client_id` as `MCP_OAUTH_CLIENT_ID`. This **skips Dynamic Client Registration**
+entirely: no `client.json`, no DCR dependency on the backend, and none of the
+first-login `invalid_client` propagation races. It's still public + PKCE, so
+every user shares the one `client_id` and logs in with their own browser — no
+secret is distributed.
+
+**DCR fallback.** Leave `MCP_OAUTH_CLIENT_ID` blank and the server
+self-registers on first login — but then the backend's Clerk instance must have
+**Dynamic Client Registration** enabled.
+
+> Static client pins the redirect URI, so keep `MCP_OAUTH_CALLBACK_PORT` at
+> whatever you registered (or register each port you use).
 
 ## Connecting to a client
 
@@ -177,8 +195,9 @@ belt when pointing at production. Default is full access (all methods).
 
 - **`src/config.ts`** — validated env; derives the `/mcp` URL, OAuth store dir,
   loopback callback port, read-only flag.
-- **`src/oauth.ts`** — `OAuthClientProvider`: caches the DCR client + tokens +
-  PKCE verifier on disk; opens the system browser to authorize.
+- **`src/oauth.ts`** — `OAuthClientProvider`: uses `MCP_OAUTH_CLIENT_ID` when
+  set (skipping DCR) or caches the DCR client on disk; caches tokens + the PKCE
+  verifier; opens the system browser to authorize.
 - **`src/upstream.ts`** — the single OAuth'd MCP client connection to `/mcp`
   (with the loopback callback server); `callTool` / `callApiRequest` proxies.
 - **`src/api-client.ts`** — `ApiClient` over `callApiRequest`; same
