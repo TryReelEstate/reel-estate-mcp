@@ -10,16 +10,32 @@ import { fileURLToPath } from "node:url";
 // the client still wins (dotenv doesn't override existing process.env).
 loadEnv({ path: join(dirname(fileURLToPath(import.meta.url)), "..", ".env") });
 
+/** Default backend when MCP_SERVER_URL isn't set — Reel Estate production. */
+const DEFAULT_SERVER_URL = "https://api.tryreelestate.com";
+
 /**
- * Public OAuth client for the default backend (the tryreelestate.dev / staging
- * Clerk instance). It's a public client (PKCE, no secret), so shipping it in
- * source is safe and lets the bridge authenticate with zero config.
+ * Built-in public OAuth client ids, keyed by backend host. These are PUBLIC
+ * clients (PKCE, no secret), so shipping them in source is safe and lets the
+ * bridge authenticate with zero config.
  *
- * IMPORTANT: a client id is only valid on the Clerk instance that created it. If
- * you point MCP_SERVER_URL at a backend on a DIFFERENT instance (e.g.
- * production), set MCP_OAUTH_CLIENT_ID to that instance's public client id.
+ * A client id is only valid on the Clerk instance that issued it, so the default
+ * is chosen by host. For any other backend (e.g. a self-hosted deployment on its
+ * own Clerk instance), set MCP_OAUTH_CLIENT_ID explicitly.
  */
-const DEFAULT_PUBLIC_CLIENT_ID = "rIaBig0Snca4mzrC";
+const DEFAULT_CLIENT_ID_BY_HOST: Record<string, string> = {
+  "api.tryreelestate.com": "to8vyZYVhk0BL18o", // production (.com Clerk instance)
+  "api.tryreelestate.dev": "rIaBig0Snca4mzrC", // dev/staging (clerk.tryreelestate.dev)
+  "reel-estate-staging-c69e8a83d6df.herokuapp.com": "rIaBig0Snca4mzrC", // staging dyno
+};
+
+/** The built-in public client id for a backend URL, or undefined if unknown. */
+function defaultClientIdFor(serverUrl: string): string | undefined {
+  try {
+    return DEFAULT_CLIENT_ID_BY_HOST[new URL(serverUrl).host.toLowerCase()];
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * Centralized, validated configuration.
@@ -51,10 +67,10 @@ export interface Config {
   /** Optional OAuth scope override; omitted -> negotiated from server metadata. */
   scope?: string;
   /**
-   * Pre-registered public OAuth client id. When set, the server uses it directly
-   * and SKIPS Dynamic Client Registration (no client.json, no DCR dependency on
-   * the backend). Leave blank to fall back to DCR. Public + PKCE either way, so
-   * there's no secret to distribute.
+   * Pre-registered public OAuth client id used for the browser login (public
+   * client + PKCE — no secret). Resolved from MCP_OAUTH_CLIENT_ID, else the
+   * built-in default for the backend host. Undefined only for an unknown backend
+   * with no explicit id set (login then can't proceed — set MCP_OAUTH_CLIENT_ID).
    */
   oauthClientId?: string;
   /** When true, only GET requests are permitted (mutating tools are blocked). */
@@ -66,13 +82,13 @@ let cached: Config | null = null;
 export function getConfig(): Config {
   if (cached) return cached;
 
-  const rawServer = process.env.MCP_SERVER_URL ?? process.env.API_BASE_URL;
-  if (!rawServer || !rawServer.trim()) {
-    throw new Error(
-      "Missing MCP_SERVER_URL — the backend origin hosting the /mcp endpoint " +
-        "(e.g. https://your-backend.herokuapp.com). Copy .env.example to .env and set it.",
-    );
-  }
+  // Defaults to Reel Estate production; override with MCP_SERVER_URL for staging
+  // or a self-hosted backend.
+  const rawServer = (
+    process.env.MCP_SERVER_URL?.trim() ||
+    process.env.API_BASE_URL?.trim() ||
+    DEFAULT_SERVER_URL
+  );
 
   const callbackPort = Number(process.env.MCP_OAUTH_CALLBACK_PORT ?? 8765) || 8765;
 
@@ -82,7 +98,7 @@ export function getConfig(): Config {
     callbackPort,
     redirectUrl: `http://localhost:${callbackPort}/callback`,
     scope: process.env.MCP_OAUTH_SCOPE?.trim() || undefined,
-    oauthClientId: process.env.MCP_OAUTH_CLIENT_ID?.trim() || DEFAULT_PUBLIC_CLIENT_ID,
+    oauthClientId: process.env.MCP_OAUTH_CLIENT_ID?.trim() || defaultClientIdFor(rawServer),
     readOnly: /^(1|true|yes)$/i.test(process.env.MCP_READONLY ?? ""),
   };
   return cached;

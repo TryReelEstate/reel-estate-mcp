@@ -43,15 +43,22 @@ That's it — the server runs straight from TypeScript via `tsx`; no build step.
 
 ## Connect your assistant
 
-Point the bridge at the Reel Estate backend with `MCP_SERVER_URL` (the API host —
-a bare origin gets `/mcp` appended). The public OAuth `client_id` is **built in**,
-so no other setup is needed for the hosted backend.
+**Zero config for production** — the bridge defaults to the Reel Estate production
+backend (`https://api.tryreelestate.com`) and bundles the matching public OAuth
+`client_id`, so you just point your client at the cloned `src/index.ts`. Only set
+`MCP_SERVER_URL` for **staging** or a **self-hosted** backend.
 
 ### Claude Code
 
 ```bash
+claude mcp add reel-estate -- npx tsx /path/to/reel-estate-mcp/src/index.ts
+```
+
+For staging / self-hosted, pass the backend origin (`/mcp` is appended):
+
+```bash
 claude mcp add reel-estate \
-  -e MCP_SERVER_URL=https://api.tryreelestate.com \
+  -e MCP_SERVER_URL=https://your-backend.example.com \
   -- npx tsx /path/to/reel-estate-mcp/src/index.ts
 ```
 
@@ -65,14 +72,15 @@ fixing the path to your clone:
   "mcpServers": {
     "reel-estate": {
       "command": "npx",
-      "args": ["tsx", "/path/to/reel-estate-mcp/src/index.ts"],
-      "env": {
-        "MCP_SERVER_URL": "https://api.tryreelestate.com"
-      }
+      "args": ["tsx", "/path/to/reel-estate-mcp/src/index.ts"]
     }
   }
 }
 ```
+
+> For staging or a self-hosted backend, add an `"env"` block with
+> `"MCP_SERVER_URL": "https://your-backend.example.com"` (and, for a backend on a
+> different Clerk instance, `"MCP_OAUTH_CLIENT_ID"`).
 
 ## First run — sign in
 
@@ -94,16 +102,17 @@ the cache) or delete `~/.reel-estate-mcp`.
 ## Configuration
 
 Set env vars in your client's MCP config (recommended) or in a local `.env`
-(loaded from this package's folder). Only `MCP_SERVER_URL` is required.
+(loaded from this package's folder). **All are optional** — the defaults target
+Reel Estate production.
 
-| Var | Required | Default | Purpose |
-| --- | --- | --- | --- |
-| `MCP_SERVER_URL` | ✅ | — | Reel Estate backend origin (the API host); `/mcp` is appended. Production: `https://api.tryreelestate.com` |
-| `MCP_OAUTH_CLIENT_ID` | — | built-in | Public OAuth client id. A default is bundled for Reel Estate's hosted Clerk instance. **Override only** if you point at a backend on a different Clerk instance (e.g. a self-hosted deployment) — a client id is valid only on the instance that created it. |
-| `MCP_OAUTH_CALLBACK_PORT` | — | `8765` | Loopback port for the OAuth redirect; must match the registered redirect URI (`http://localhost:<port>/callback`). |
-| `MCP_OAUTH_STORE_DIR` | — | `~/.reel-estate-mcp` | Where OAuth tokens are cached. |
-| `MCP_OAUTH_SCOPE` | — | negotiated | Override the OAuth scope. |
-| `MCP_READONLY` | — | off | `1`/`true` blocks all non-GET requests (a safety belt against writes). |
+| Var | Default | Purpose |
+| --- | --- | --- |
+| `MCP_SERVER_URL` | `https://api.tryreelestate.com` | Reel Estate backend origin (the API host); `/mcp` is appended. Set for staging or a self-hosted backend. |
+| `MCP_OAUTH_CLIENT_ID` | bundled per host | Public OAuth client id. Defaults are bundled for Reel Estate's production and staging backends. **Set it only** for a backend on a different Clerk instance (e.g. self-hosted) — a client id is valid only on the instance that created it. |
+| `MCP_OAUTH_CALLBACK_PORT` | `8765` | Loopback port for the OAuth redirect; must match the registered redirect URI (`http://localhost:<port>/callback`). |
+| `MCP_OAUTH_STORE_DIR` | `~/.reel-estate-mcp` | Where OAuth tokens are cached. |
+| `MCP_OAUTH_SCOPE` | negotiated | Override the OAuth scope. |
+| `MCP_READONLY` | off | `1`/`true` blocks all non-GET requests (a safety belt against writes). |
 
 > **Authentication is public OAuth + PKCE.** There is no client secret and no API
 > key. Dynamic Client Registration is **not** used — the bridge presents the
