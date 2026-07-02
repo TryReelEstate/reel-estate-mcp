@@ -1,151 +1,64 @@
 # reel-estate-mcp
 
-A self-hosted [Model Context Protocol](https://modelcontextprotocol.io) server
-that gives an assistant (Claude Desktop, Claude Code, Cursor) the Reel Estate
-product API **plus local-filesystem superpowers** — most notably uploading
-**local image files** into a project.
+**Turn real-estate listing photos into cinematic property videos from your AI
+assistant.** `reel-estate-mcp` is a [Model Context Protocol](https://modelcontextprotocol.io)
+(MCP) server that connects **Claude, Cursor, and other AI assistants** to your
+[**Reel Estate**](https://tryreelestate.com) account — so you can generate motion
+clips, AI-edit photos (virtual staging, twilight, seasonal), add voiceover, and
+render finished listing videos, all in plain language.
 
-It is an **OAuth client of the backend's embedded `/mcp` endpoint**. It does
-**not** mint Clerk sessions and needs **no secret key**: you sign in through
-your browser once, tokens are cached locally, and every API call is proxied
-through `/mcp` (the backend stays the single auth authority). The only thing
-this server adds is the ability to read local files and stream their bytes
-straight to storage — something a remote MCP can't do.
+> Reel Estate is the AI real-estate video platform that turns property photos into
+> scroll-stopping listing videos. Create a free account at
+> **[tryreelestate.com](https://tryreelestate.com)**.
 
-## How auth works
+You sign in once through your browser (OAuth + PKCE — **no API keys, no secrets**),
+and every call is proxied through the backend's `/mcp` endpoint, which stays the
+single authority for auth, plans, and permissions. This bridge's one superpower on
+top of that: it can read **local image files** and stream them straight into a
+project — something a purely remote server can't do.
 
-```
-first tool call
-   │   StreamableHTTP client ──► backend /mcp  (401, needs auth)
-   ▼
-opens your browser ──► Clerk OAuth (PKCE; DCR optional) ──► you approve
-   │                                                   │
-   ▼                                                   ▼
-loopback http://localhost:8765/callback?code=…   access + refresh tokens
-   │                                                   │
-   └────────────► finishAuth(code) ──► tokens cached ──┘
-                                       (~/.reel-estate-mcp)
+- 🎬 **Generate real-estate videos** — animate photos into clips, then render the movie
+- 🖼️ **AI photo editing** — virtual staging, twilight, upscale, seasonal, replace/remove/add
+- 🎙️ **Voiceover & timeline** — narration, music, overlays, reordering
+- 📤 **Local uploads** — push photos from disk into a project
+- 🔐 **Browser sign-in** — public OAuth client + PKCE; nothing secret stored
+- 🤖 **Works with** Claude Code, Claude Desktop, and Cursor
 
-every later call:  callTool("api_request", …) over the authed /mcp connection
-```
+## Requirements
 
-- **No secrets to distribute** — public client + PKCE, browser login per user.
-- **Prod-capable** — uses the same OAuth the backend already serves at `/mcp`
-  (unlike server-side Clerk session minting, which only works on dev instances).
-- **Re-authorize / switch user** — delete the token cache dir and run again.
-- **DCR is optional** — set `MCP_OAUTH_CLIENT_ID` to a pre-registered public
-  client to skip Dynamic Client Registration (recommended). See below.
+- **Node.js 18+**
+- A **[Reel Estate](https://tryreelestate.com) account** (a **paid plan** is
+  required to create/generate/render; free accounts are read-only over the MCP)
+- An MCP-compatible client: **Claude Code**, **Claude Desktop**, or **Cursor**
 
-### `MCP_SERVER_URL` is the *backend* origin, not the website
-
-`/mcp` is mounted on the **backend** host (the same origin the frontend uses as
-its API base), e.g. your Heroku/Render app URL — not the marketing site. A bare
-origin gets `/mcp` appended automatically.
-
-## Tools
-
-| Tool | Endpoint |
-| --- | --- |
-| `help` | guided start-to-finish walkthrough (also the `getting_started` prompt) |
-| `whoami` | `GET /users/profile` + config — confirm auth; reports `plan`, `canWrite`, and a `writeAccess` reason |
-| `login` | authenticate — returns an authorization URL to open in your browser; token caches in the background |
-| `logout` | clear the cached OAuth session (best-effort server revoke) — next call needs `login` again |
-| `list_projects` | `GET /projects` (paging, sort, search, status) |
-| `get_project` | `GET /projects/:id` |
-| `project_stats` | `GET /projects/stats` |
-| `list_clips` | `GET /clips` or `GET /clips/project/:projectId` |
-| `list_movies` | `GET /movies` or `GET /movies/project/:projectId` |
-| `list_voices` | `GET /voices` (TTS voice presets) |
-| `resolve_address` | geocode a free-text address → ranked candidates (for creating real-listing projects) |
-| `add_image_from_file` | upload a **local** image file to a project — presigned `PUT` to storage, then attach (no storage creds) |
-| `generate_clip` | animate a project image into a video clip (Runway); returns a jobId |
-| `get_clip_status` | poll a `generate_clip` job |
-| `edit_image` | Gemini image edit (staging / twilight / upscale / seasonal / replace-remove-add / manual); versioned |
-| `add_timeline_audio` | place an existing voiceover/music/audio URL on the timeline at a point |
-| `add_timeline_overlay` | overlay a project image/logo or a text caption at a point |
-| `move_timeline_element` | retime a single timeline element (startTime/duration) |
-| `reorder_timeline` | resequence a track (default: the clip track) with recomputed back-to-back timing |
-| `render_movie` | assemble the project timeline into the final movie |
-| `list_endpoints` | the curated API catalog (so you know what `api_request` can call) |
-| `api_request` | **any** route, any method — the escape hatch that covers the whole API |
-
-All API tools are proxied through the backend's `/mcp` `api_request` tool, so
-the backend's own authorization rules apply. `api_request` is the workhorse:
-`{ method, path, query?, body? }`.
-
-### Paid vs free accounts
-
-Writes/generation over the MCP require a **paid plan** — free accounts get
-**read-only** access (browse projects/clips/movies, but no create/edit/generate/
-render). `whoami` reports this up front (`canWrite` + a `writeAccess` reason); a
-blocked write returns `403 MCP_PAID_PLAN_REQUIRED`. MCP-originated generation is
-also bounded by a credit-velocity cap to prevent runaway spend.
-
-## Start-to-finish walkthrough
-
-Call the **`help`** tool (or the **`getting_started`** prompt) any time for this
-as structured, always-current steps. The pipeline:
-
-1. **Sign in & confirm access** — `login`, then `whoami` (check `canWrite`).
-2. **Create a project** — `resolve_address` to geocode the listing address, then
-   `api_request POST /projects` with `{ name, address: <chosen candidate> }`.
-3. **Add photos** — `add_image_from_file` (local file → presigned upload →
-   attach; `addToTimeline` defaults true so each photo is in the render).
-4. **Edit photos (optional)** — `edit_image` (staging/twilight/upscale/…). Async;
-   poll `get_project` for the new active version.
-5. **Animate into clips** — `generate_clip` (auto/zoom/orbit/drone/custom). Async;
-   poll `get_clip_status`. The finished clip auto-binds to its timeline element.
-6. **Music / voiceover / overlays (optional)** — `add_timeline_audio`,
-   `add_timeline_overlay` (`list_voices` for TTS presets).
-7. **Arrange (optional)** — `reorder_timeline` / `move_timeline_element` (element
-   ids from `get_project`).
-8. **Render** — `render_movie`. Async; poll `list_movies` (done =
-   `renderData.status === 'completed'` with a `videoUrl`).
-
-> Async tools (`edit_image`, `generate_clip`, `render_movie`) return a jobId —
-> poll rather than assume completion.
-
-## Setup
+## Install
 
 ```bash
+git clone https://github.com/TryReelEstate/reel-estate-mcp.git
+cd reel-estate-mcp
 npm install
-cp .env.example .env   # set MCP_SERVER_URL (the backend origin hosting /mcp)
-npm run typecheck
-npm run smoke          # opens a browser to authorize, then calls a few GETs
 ```
 
-`.env`:
+That's it — the server runs straight from TypeScript via `tsx`; no build step.
 
+## Connect your assistant
+
+Point the bridge at the Reel Estate backend with `MCP_SERVER_URL` (the API host —
+a bare origin gets `/mcp` appended). The public OAuth `client_id` is **built in**,
+so no other setup is needed for the hosted backend.
+
+### Claude Code
+
+```bash
+claude mcp add reel-estate \
+  -e MCP_SERVER_URL=https://api.tryreelestate.com \
+  -- npx tsx /path/to/reel-estate-mcp/src/index.ts
 ```
-MCP_SERVER_URL=https://<backend-host>   # bare origin → "/mcp" appended
-MCP_OAUTH_CLIENT_ID=                     # optional but recommended (see below); skips DCR
-MCP_OAUTH_CALLBACK_PORT=8765            # optional; loopback port for the redirect
-MCP_OAUTH_STORE_DIR=                    # optional; default ~/.reel-estate-mcp
-MCP_OAUTH_SCOPE=                        # optional; negotiated from metadata if blank
-MCP_READONLY=                           # optional: 1/true blocks non-GET
-```
 
-### OAuth client registration (pick one)
+### Claude Desktop / Cursor
 
-**Static client (recommended).** Create a **public** OAuth application once in the
-Clerk dashboard — PKCE, `token_endpoint_auth_method=none`, redirect URI
-`http://localhost:8765/callback` (match `MCP_OAUTH_CALLBACK_PORT`) — and set its
-`client_id` as `MCP_OAUTH_CLIENT_ID`. This **skips Dynamic Client Registration**
-entirely: no `client.json`, no DCR dependency on the backend, and none of the
-first-login `invalid_client` propagation races. It's still public + PKCE, so
-every user shares the one `client_id` and logs in with their own browser — no
-secret is distributed.
-
-**DCR fallback.** Leave `MCP_OAUTH_CLIENT_ID` blank and the server
-self-registers on first login — but then the backend's Clerk instance must have
-**Dynamic Client Registration** enabled.
-
-> Static client pins the redirect URI, so keep `MCP_OAUTH_CALLBACK_PORT` at
-> whatever you registered (or register each port you use).
-
-## Connecting to a client
-
-### Claude Desktop (`claude_desktop_config.json`)
+Add to your client's MCP config (`claude_desktop_config.json`, `~/.cursor/mcp.json`),
+fixing the path to your clone:
 
 ```json
 {
@@ -154,66 +67,138 @@ self-registers on first login — but then the backend's Clerk instance must hav
       "command": "npx",
       "args": ["tsx", "/path/to/reel-estate-mcp/src/index.ts"],
       "env": {
-        "MCP_SERVER_URL": "https://<backend-host>"
+        "MCP_SERVER_URL": "https://api.tryreelestate.com"
       }
     }
   }
 }
 ```
 
-### Claude Code
+## First run — sign in
 
-```bash
-claude mcp add reel-estate \
-  -e MCP_SERVER_URL=https://<backend-host> \
-  -- npx tsx /path/to/reel-estate-mcp/src/index.ts
+The first tool call opens your browser to sign in with your Reel Estate account
+(Clerk OAuth, authorization code + PKCE). After you approve, the browser returns to
+`http://localhost:8765/callback`, tokens cache under `~/.reel-estate-mcp`, and
+you're in — you won't log in again until the token expires.
+
+Start with **`whoami`** to confirm auth and see your plan, then just ask:
+
+- *"List my recent projects."*
+- *"Create a project for 123 Main St and upload the photos in ./listing."*
+- *"Virtually stage the living room photo, generate a drone clip, then render in 9:16."*
+- *"How many credits and exports do I have left?"*
+
+To switch users or re-authorize, run **`logout`** (revokes server-side + clears
+the cache) or delete `~/.reel-estate-mcp`.
+
+## Configuration
+
+Set env vars in your client's MCP config (recommended) or in a local `.env`
+(loaded from this package's folder). Only `MCP_SERVER_URL` is required.
+
+| Var | Required | Default | Purpose |
+| --- | --- | --- | --- |
+| `MCP_SERVER_URL` | ✅ | — | Reel Estate backend origin (the API host); `/mcp` is appended. Production: `https://api.tryreelestate.com` |
+| `MCP_OAUTH_CLIENT_ID` | — | built-in | Public OAuth client id. A default is bundled for Reel Estate's hosted Clerk instance. **Override only** if you point at a backend on a different Clerk instance (e.g. a self-hosted deployment) — a client id is valid only on the instance that created it. |
+| `MCP_OAUTH_CALLBACK_PORT` | — | `8765` | Loopback port for the OAuth redirect; must match the registered redirect URI (`http://localhost:<port>/callback`). |
+| `MCP_OAUTH_STORE_DIR` | — | `~/.reel-estate-mcp` | Where OAuth tokens are cached. |
+| `MCP_OAUTH_SCOPE` | — | negotiated | Override the OAuth scope. |
+| `MCP_READONLY` | — | off | `1`/`true` blocks all non-GET requests (a safety belt against writes). |
+
+> **Authentication is public OAuth + PKCE.** There is no client secret and no API
+> key. Dynamic Client Registration is **not** used — the bridge presents the
+> pre-registered public client (the bundled default, or your `MCP_OAUTH_CLIENT_ID`).
+
+## Tools
+
+All API tools proxy through the backend's `/mcp` `api_request`, so the backend's
+own authorization and plan rules apply.
+
+| Tool | What it does |
+| --- | --- |
+| `help` | Guided, always-current walkthrough (also the `getting_started` prompt) |
+| `whoami` | Confirm auth; reports `plan`, `canWrite`, and a `writeAccess` reason. **Run first.** |
+| `login` / `logout` | Start browser sign-in / clear the session (server revoke + local cache) |
+| `list_projects` · `get_project` · `project_stats` | Browse projects |
+| `list_clips` · `list_movies` · `list_voices` | Browse clips, rendered movies, TTS voices |
+| `resolve_address` | Geocode a free-text address → ranked candidates (for real-listing projects) |
+| `add_image_from_file` | Upload a **local** image into a project (presigned upload — no storage creds) |
+| `generate_clip` · `get_clip_status` | Animate a photo into a video clip (Runway); poll the job |
+| `edit_image` | AI photo edit — virtual staging, twilight, upscale, seasonal, replace/remove/add, manual |
+| `add_timeline_audio` · `add_timeline_overlay` | Place voiceover/music/audio or an image/text overlay |
+| `move_timeline_element` · `reorder_timeline` | Retime / resequence the timeline |
+| `render_movie` | Assemble the timeline into the final listing video |
+| `list_endpoints` · `api_request` | Discover the API catalog / call any route — the escape hatch |
+
+### Paid vs free
+
+Writes and generation over the MCP require a **paid plan** — free accounts are
+**read-only** (browse projects, clips, and movies). `whoami` reports this up front;
+a blocked write returns `403 MCP_PAID_PLAN_REQUIRED`. See plans at
+[tryreelestate.com](https://tryreelestate.com).
+
+## How auth works
+
+```
+first tool call
+   │   StreamableHTTP client ──► backend /mcp  (401, needs auth)
+   ▼
+opens your browser ──► Clerk OAuth (authorization code + PKCE, public client)
+   │                                                   │
+   ▼                                                   ▼
+loopback http://localhost:8765/callback?code=…   access + refresh tokens
+   │                                                   │
+   └────────────► finishAuth(code) ──► tokens cached ──┘  (~/.reel-estate-mcp)
+
+every later call:  callTool("api_request", …) over the authed /mcp connection
 ```
 
-The first tool call opens your browser to authorize. If the browser can't open
-(headless box), copy the URL printed to stderr.
+- **No secrets to distribute** — public client + PKCE, browser login per user.
+- **Prod-capable** — uses the same OAuth the backend serves at `/mcp`.
+- **The backend is the single auth authority** — this bridge never mints tokens.
 
-## Example calls
+## Troubleshooting
 
-```jsonc
-// whoami  → first call authorizes via the browser, then confirms the user
-{}
-
-// add_image_from_file  → upload a LOCAL photo into a project
-{ "projectId": "6a4444cb7cd177ef1136daa1", "path": "C:/photos/exterior.jpg", "caption": "Front exterior" }
-
-// api_request — anything not covered by a convenience tool
-{ "method": "GET",  "path": "/billing/can-generate" }
-{ "method": "POST", "path": "/projects", "body": { "name": "123 Main St" } }
-```
-
-## Read-only mode
-
-Set `MCP_READONLY=1` to block every non-GET request at this layer — a safety
-belt when pointing at production. Default is full access (all methods).
+| Problem | Fix |
+| --- | --- |
+| No login prompt / "not authenticated" | Run any tool (or `login`), open the printed URL, and approve. To re-auth or switch users: `rm -rf ~/.reel-estate-mcp`. |
+| `invalid_client` on login | `MCP_OAUTH_CLIENT_ID` doesn't match the backend's Clerk instance. Use the client id registered on the instance behind your `MCP_SERVER_URL`. |
+| Browser login never completes | Ensure the Clerk OAuth client has `http://localhost:8765/callback` registered as a redirect URI (match `MCP_OAUTH_CALLBACK_PORT`). |
+| `does not support dynamic client registration` | The backend has DCR disabled — set `MCP_OAUTH_CLIENT_ID` (or use the bundled default). |
 
 ## Architecture
 
-- **`src/config.ts`** — validated env; derives the `/mcp` URL, OAuth store dir,
-  loopback callback port, read-only flag.
-- **`src/oauth.ts`** — `OAuthClientProvider`: uses `MCP_OAUTH_CLIENT_ID` when
-  set (skipping DCR) or caches the DCR client on disk; caches tokens + the PKCE
-  verifier; opens the system browser to authorize.
-- **`src/upstream.ts`** — the single OAuth'd MCP client connection to `/mcp`
-  (with the loopback callback server); `callTool` / `callApiRequest` proxies.
-- **`src/api-client.ts`** — `ApiClient` over `callApiRequest`; same
-  `{ status, ok, url, method, data }` shape as before, enforces read-only.
+- **`src/config.ts`** — validated env (loaded from this package's folder); derives
+  the `/mcp` URL, OAuth store dir, callback port, read-only flag, and default client id.
+- **`src/oauth.ts`** — `OAuthClientProvider`: uses the public `client_id`, caches
+  tokens + the PKCE verifier, opens the system browser.
+- **`src/upstream.ts`** — the single OAuth'd MCP client connection to `/mcp` (with
+  the loopback callback server); `callTool` / `callApiRequest` proxies.
+- **`src/api-client.ts`** — `ApiClient` over `callApiRequest`; enforces read-only.
 - **`src/catalog.ts`** — the endpoint catalog surfaced by `list_endpoints`.
-- **`src/tools.ts`** — tools as plain functions (smoke-testable). `add_image_from_file`
-  reads a local file → mints a presigned URL → `PUT`s bytes → attaches.
-- **`src/index.ts`** — registers the tools as MCP tools over **stdio**
-  (diagnostics → stderr, protocol → stdout).
+- **`src/tools.ts`** — tools as plain functions (smoke-testable).
+- **`src/index.ts`** — registers the tools as MCP tools over **stdio**.
 
-## Adding a tool
+### Adding a tool
 
-1. Add `async function fooBar(api, args)` in `src/tools.ts` (use `api.get(...)`
-   or `api.request(...)`, which proxy through `/mcp`).
+1. Add `async function fooBar(api, args)` in `src/tools.ts` (use `api.get(...)` /
+   `api.request(...)`, which proxy through `/mcp`).
 2. Register it in `src/index.ts` with a Zod `inputSchema`.
 3. Add it to `scripts/smoke.ts` if it's a GET.
 
-Everything is already reachable through `api_request`; convenience tools just
-make the common paths first-class.
+Everything is already reachable through `api_request`; convenience tools just make
+the common paths first-class.
+
+## About Reel Estate
+
+[**Reel Estate**](https://tryreelestate.com) helps real-estate agents and marketers
+turn ordinary **listing photos into professional property videos** — AI virtual
+staging, twilight conversion, motion/drone clips, voiceover narration, and one-click
+rendering for Instagram, TikTok, and YouTube. This MCP server brings that workflow
+into your AI assistant. **[Get started at tryreelestate.com →](https://tryreelestate.com)**
+
+---
+
+*Keywords: real estate video generator, AI listing video, virtual staging, MCP
+server, Model Context Protocol, Claude, Cursor, property video marketing, drone
+real estate video, twilight photo editing.*

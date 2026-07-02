@@ -1,6 +1,25 @@
-import "dotenv/config";
+import { config as loadEnv } from "dotenv";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+// Load .env from THIS package's root (one level up from src/), NOT the process
+// cwd. The MCP client launches us with an arbitrary working directory, so the
+// default cwd-relative loading silently dropped our config (e.g.
+// MCP_OAUTH_CLIENT_ID → unintended DCR fallback). Any real env var already set by
+// the client still wins (dotenv doesn't override existing process.env).
+loadEnv({ path: join(dirname(fileURLToPath(import.meta.url)), "..", ".env") });
+
+/**
+ * Public OAuth client for the default backend (the tryreelestate.dev / staging
+ * Clerk instance). It's a public client (PKCE, no secret), so shipping it in
+ * source is safe and lets the bridge authenticate with zero config.
+ *
+ * IMPORTANT: a client id is only valid on the Clerk instance that created it. If
+ * you point MCP_SERVER_URL at a backend on a DIFFERENT instance (e.g.
+ * production), set MCP_OAUTH_CLIENT_ID to that instance's public client id.
+ */
+const DEFAULT_PUBLIC_CLIENT_ID = "rIaBig0Snca4mzrC";
 
 /**
  * Centralized, validated configuration.
@@ -63,7 +82,7 @@ export function getConfig(): Config {
     callbackPort,
     redirectUrl: `http://localhost:${callbackPort}/callback`,
     scope: process.env.MCP_OAUTH_SCOPE?.trim() || undefined,
-    oauthClientId: process.env.MCP_OAUTH_CLIENT_ID?.trim() || undefined,
+    oauthClientId: process.env.MCP_OAUTH_CLIENT_ID?.trim() || DEFAULT_PUBLIC_CLIENT_ID,
     readOnly: /^(1|true|yes)$/i.test(process.env.MCP_READONLY ?? ""),
   };
   return cached;

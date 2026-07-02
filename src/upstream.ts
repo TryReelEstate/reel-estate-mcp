@@ -37,9 +37,10 @@ function startCallbackServer(port: number): { waitForCode: Promise<string>; clos
       }
       const code = url.searchParams.get("code");
       const error = url.searchParams.get("error");
-      res.writeHead(200, { "content-type": "text/html" });
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       res.end(
-        "<html><body style='font-family:sans-serif'><h3>Authorized ✓</h3>" +
+        "<!doctype html><html><head><meta charset='utf-8'></head>" +
+          "<body style='font-family:sans-serif'><h3>Authorized ✓</h3>" +
           "<p>You can close this tab and return to your terminal.</p></body></html>",
       );
       if (code) resolve(code);
