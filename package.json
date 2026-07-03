@@ -1,8 +1,8 @@
 {
   "name": "reel-estate-mcp",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "Generate real estate listing videos from Claude, Cursor, and any MCP client — AI virtual staging, twilight photo edits, drone-style motion clips, voiceover, and rendered property videos for Instagram, TikTok, and YouTube. Official Reel Estate MCP server.",
-  "mcpName": "io.github.TryReelEstate/reel-estate-mcp",
+  "mcpName": "com.tryreelestate/reel-estate-mcp",
   "type": "module",
   "license": "MIT",
   "author": "Reel Estate (https://tryreelestate.com)",
