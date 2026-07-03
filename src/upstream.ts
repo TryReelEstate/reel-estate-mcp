@@ -29,6 +29,19 @@ function startCallbackServer(port: number): { waitForCode: Promise<string>; clos
 
   const server = http.createServer((req, res) => {
     try {
+      // Loopback-only: the OAuth redirect always comes from the user's own
+      // browser on this machine. Reject anything from off-box so another host on
+      // the LAN can't hit the callback to inject or race for an auth code. We
+      // gate on the peer address rather than binding to 127.0.0.1, because the
+      // redirect_uri is `http://localhost:...` and `localhost` may resolve to
+      // ::1 (IPv6) first on Windows — binding a single family could break login.
+      const peer = req.socket.remoteAddress ?? "";
+      const isLoopback = peer === "127.0.0.1" || peer === "::1" || peer === "::ffff:127.0.0.1";
+      if (!isLoopback) {
+        res.writeHead(403);
+        res.end("Forbidden");
+        return;
+      }
       const url = new URL(req.url ?? "/", `http://localhost:${port}`);
       if (url.pathname !== "/callback") {
         res.writeHead(404);

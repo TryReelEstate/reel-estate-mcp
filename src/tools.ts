@@ -226,19 +226,35 @@ export async function apiRequest(
   );
 }
 
-/** Surface HTTP status alongside the body so error envelopes are visible. */
-const MIME_BY_EXT: Record<string, string> = {
-  ".jpg": "image/jpeg",
-  ".jpeg": "image/jpeg",
-  ".png": "image/png",
-  ".webp": "image/webp",
-  ".gif": "image/gif",
-};
-
-function mimeFromName(name: string): string {
-  const dot = name.lastIndexOf(".");
-  const ext = dot >= 0 ? name.slice(dot).toLowerCase() : "";
-  return MIME_BY_EXT[ext] ?? "image/jpeg";
+/**
+ * Sniff the real image type from the file's magic bytes, ignoring the filename.
+ * Returns null for anything that isn't a supported image.
+ *
+ * This is a security control, not a convenience: `add_image_from_file` takes an
+ * arbitrary local path and uploads the bytes to a publicly-reachable URL. Trusting
+ * the extension would let a mislabeled (or maliciously-argued) tool call push a
+ * secret file — `~/.ssh/id_rsa`, `.env`, the bridge's own tokens.json — to public
+ * storage. Validating the content bytes means only genuine images can leave the
+ * machine, so a prompt-injected tool call can't exfiltrate secrets this way.
+ */
+function sniffImageMime(buf: Buffer): string | null {
+  if (buf.length >= 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return "image/jpeg";
+  if (
+    buf.length >= 8 &&
+    buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47 &&
+    buf[4] === 0x0d && buf[5] === 0x0a && buf[6] === 0x1a && buf[7] === 0x0a
+  ) {
+    return "image/png";
+  }
+  if (buf.length >= 6 && buf.toString("ascii", 0, 4) === "GIF8") return "image/gif";
+  if (
+    buf.length >= 12 &&
+    buf.toString("ascii", 0, 4) === "RIFF" &&
+    buf.toString("ascii", 8, 12) === "WEBP"
+  ) {
+    return "image/webp";
+  }
+  return null;
 }
 
 /**
@@ -256,7 +272,17 @@ export async function addImageFromFile(
 ) {
   const buffer = await readFile(args.path);
   const name = args.filename ?? basename(args.path);
-  const contentType = mimeFromName(name);
+  // Content-sniff the bytes and REJECT non-images before anything leaves the box.
+  // Guards against uploading a secret file (keys, .env, tokens) to a public URL —
+  // the extension/filename is not trusted for this decision.
+  const contentType = sniffImageMime(buffer);
+  if (!contentType) {
+    throw new Error(
+      `Refusing to upload ${args.path}: not a supported image ` +
+        `(expected JPEG, PNG, WebP, or GIF by file content). ` +
+        `add_image_from_file only accepts real image files.`,
+    );
+  }
 
   // 1. Mint a presigned upload URL (authenticated as the user; no storage creds).
   const minted = await api.request({

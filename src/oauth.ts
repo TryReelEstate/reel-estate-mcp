@@ -106,7 +106,8 @@ export class FileOAuthProvider implements OAuthClientProvider {
 
   async saveCodeVerifier(verifier: string): Promise<void> {
     await this.ensureDir();
-    await writeFile(join(this.storeDir, "verifier.txt"), verifier, "utf8");
+    // 0600: the in-flight PKCE verifier is a secret for the auth window.
+    await writeFile(join(this.storeDir, "verifier.txt"), verifier, { encoding: "utf8", mode: 0o600 });
   }
 
   async codeVerifier(): Promise<string> {
@@ -118,7 +119,9 @@ export class FileOAuthProvider implements OAuthClientProvider {
   }
 
   private async ensureDir(): Promise<void> {
-    await mkdir(this.storeDir, { recursive: true });
+    // 0700: the store holds OAuth tokens — keep it owner-only on multi-user
+    // hosts. (On Windows the mode is largely ignored but harmless.)
+    await mkdir(this.storeDir, { recursive: true, mode: 0o700 });
   }
 
   private async readJson<T>(name: string): Promise<T | undefined> {
@@ -131,6 +134,10 @@ export class FileOAuthProvider implements OAuthClientProvider {
 
   private async writeJson(name: string, value: unknown): Promise<void> {
     await this.ensureDir();
-    await writeFile(join(this.storeDir, name), JSON.stringify(value, null, 2), "utf8");
+    // 0600: tokens.json/client.json carry access + refresh tokens — owner-only.
+    await writeFile(join(this.storeDir, name), JSON.stringify(value, null, 2), {
+      encoding: "utf8",
+      mode: 0o600,
+    });
   }
 }
