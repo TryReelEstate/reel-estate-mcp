@@ -1,0 +1,60 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-07-09/server.schema.json",
+  "name": "io.github.tryreelestate/reel-estate-mcp",
+  "description": "MCP server for Reel Estate — turn property photos into listing videos. An OAuth client of the Reel Estate backend that adds local-filesystem tools (e.g. upload local images) on top of the hosted /mcp endpoint.",
+  "status": "active",
+  "repository": {
+    "url": "https://github.com/TryReelEstate/reel-estate-mcp",
+    "source": "github"
+  },
+  "version": "0.3.1",
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "reel-estate-mcp",
+      "version": "0.3.1",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "MCP_SERVER_URL",
+          "description": "Backend origin hosting the /mcp endpoint. Defaults to Reel Estate production (https://api.tryreelestate.com); set to a staging or self-hosted backend to override.",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "MCP_OAUTH_CLIENT_ID",
+          "description": "Public OAuth client id (PKCE, no secret). Auto-selected per backend host by default; set only when pointing at a backend on a different Clerk instance.",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "MCP_OAUTH_CALLBACK_PORT",
+          "description": "Loopback port the browser is redirected to after sign-in. Defaults to 8765.",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "MCP_OAUTH_STORE_DIR",
+          "description": "Directory where OAuth tokens are cached. Defaults to ~/.reel-estate-mcp.",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "MCP_OAUTH_SCOPE",
+          "description": "Optional OAuth scope override. Omitted by default (negotiated from server metadata).",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "MCP_READONLY",
+          "description": "Set to 1/true to block all mutating (non-GET) tool calls.",
+          "isRequired": false,
+          "isSecret": false
+        }
+      ]
+    }
+  ]
+}

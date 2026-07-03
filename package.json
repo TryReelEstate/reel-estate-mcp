@@ -1,0 +1,59 @@
+{
+  "name": "reel-estate-mcp",
+  "version": "0.3.1",
+  "description": "Self-hosted MCP server for the Reel Estate backend — an OAuth client of the backend's /mcp endpoint that adds local-filesystem superpowers (e.g. uploading local images).",
+  "mcpName": "io.github.tryreelestate/reel-estate-mcp",
+  "type": "module",
+  "license": "MIT",
+  "author": "Reel Estate (https://tryreelestate.com)",
+  "homepage": "https://tryreelestate.com",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TryReelEstate/reel-estate-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/TryReelEstate/reel-estate-mcp/issues"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "reel-estate",
+    "real-estate",
+    "video",
+    "ai",
+    "oauth",
+    "claude"
+  ],
+  "bin": {
+    "reel-estate-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build",
+    "smoke": "tsx scripts/smoke.ts",
+    "diag": "tsx scripts/diag-oauth.ts",
+    "login": "tsx scripts/login.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "dotenv": "^17.0.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}
