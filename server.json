@@ -1,7 +1,7 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-07-09/server.schema.json",
   "name": "io.github.tryreelestate/reel-estate-mcp",
-  "description": "MCP server for Reel Estate — turn property photos into listing videos. An OAuth client of the Reel Estate backend that adds local-filesystem tools (e.g. upload local images) on top of the hosted /mcp endpoint.",
+  "description": "Turn real-estate listing photos into property videos from your AI assistant.",
   "status": "active",
   "repository": {
     "url": "https://github.com/TryReelEstate/reel-estate-mcp",
