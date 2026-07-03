@@ -1,7 +1,7 @@
 {
   "name": "reel-estate-mcp",
-  "version": "0.3.2",
-  "description": "Self-hosted MCP server for the Reel Estate backend — an OAuth client of the backend's /mcp endpoint that adds local-filesystem superpowers (e.g. uploading local images).",
+  "version": "0.3.3",
+  "description": "Generate real estate listing videos from Claude, Cursor, and any MCP client — AI virtual staging, twilight photo edits, drone-style motion clips, voiceover, and rendered property videos for Instagram, TikTok, and YouTube. Official Reel Estate MCP server.",
   "mcpName": "io.github.TryReelEstate/reel-estate-mcp",
   "type": "module",
   "license": "MIT",
@@ -16,13 +16,25 @@
   },
   "keywords": [
     "mcp",
+    "mcp-server",
     "model-context-protocol",
-    "reel-estate",
+    "claude",
+    "claude-desktop",
+    "claude-code",
+    "cursor",
+    "ai-agent",
     "real-estate",
-    "video",
-    "ai",
-    "oauth",
-    "claude"
+    "real-estate-video",
+    "real-estate-marketing",
+    "listing-video",
+    "property-video",
+    "virtual-staging",
+    "twilight-photo",
+    "video-generation",
+    "ai-video",
+    "video-marketing",
+    "reel-estate",
+    "proptech"
   ],
   "bin": {
     "reel-estate-mcp": "dist/index.js"
