@@ -2,6 +2,7 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-07-09/server.schema.json",
   "name": "io.github.TryReelEstate/reel-estate-mcp",
   "description": "Turn real-estate listing photos into property videos from your AI assistant.",
+  "website_url": "https://tryreelestate.com",
   "status": "active",
   "repository": {
     "url": "https://github.com/TryReelEstate/reel-estate-mcp",
