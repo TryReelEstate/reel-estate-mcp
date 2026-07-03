@@ -6,3 +6,7 @@ dist/
 .DS_Store
 .idea/
 .vscode/
+
+# MCP registry domain-verification keys — never commit
+*.pem
+dns-private-key.hex
