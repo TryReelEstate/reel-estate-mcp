@@ -1,19 +1,19 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-07-09/server.schema.json",
-  "name": "io.github.tryreelestate/reel-estate-mcp",
+  "name": "io.github.TryReelEstate/reel-estate-mcp",
   "description": "Turn real-estate listing photos into property videos from your AI assistant.",
   "status": "active",
   "repository": {
     "url": "https://github.com/TryReelEstate/reel-estate-mcp",
     "source": "github"
   },
-  "version": "0.3.1",
+  "version": "0.3.2",
   "packages": [
     {
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "reel-estate-mcp",
-      "version": "0.3.1",
+      "version": "0.3.2",
       "transport": {
         "type": "stdio"
       },

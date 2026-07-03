@@ -1,8 +1,8 @@
 {
   "name": "reel-estate-mcp",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Self-hosted MCP server for the Reel Estate backend — an OAuth client of the backend's /mcp endpoint that adds local-filesystem superpowers (e.g. uploading local images).",
-  "mcpName": "io.github.tryreelestate/reel-estate-mcp",
+  "mcpName": "io.github.TryReelEstate/reel-estate-mcp",
   "type": "module",
   "license": "MIT",
   "author": "Reel Estate (https://tryreelestate.com)",
