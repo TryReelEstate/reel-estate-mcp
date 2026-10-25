@@ -115,9 +115,24 @@ export function listEndpoints() {
 export function help() {
   return {
     overview:
-      "Drive the Reel Estate product end to end: create a project for a listing, add photos, " +
-      "optionally edit them (staging/twilight/etc.), animate them into clips, lay in music/voiceover " +
-      "and image/text overlays, arrange the timeline, then render the final movie.",
+      "Drive the Reel Estate product end to end. Two paths: EZ Reel (start here) turns 10 to 20 " +
+      "listing photos plus a template and song into a finished reel, with motion and cuts chosen " +
+      "for you. The Studio path below is the manual one: create a project, add photos, optionally " +
+      "edit them (staging/twilight/etc.), animate them into clips, lay in music/voiceover and " +
+      "overlays, arrange the timeline, then render the movie.",
+    ezReel: {
+      title: "EZ Reel: the fast path (use this unless the user wants manual control)",
+      steps: [
+        "ez_reel_add_photos { paths: [10 to 20 local photo files, in running order] } uploads them " +
+          "and returns assetIds. (Photos already in a project: ez_reel_import_photos { projectId } " +
+          "instead, which keeps any staging or twilight edit.)",
+        "ez_reel_catalog to pick a templateId and trackId (song). Effects are locked on free plans.",
+        "ez_reel_create { assetIds, templateId, trackId, aspects } builds the reel (no charge).",
+        "ez_reel_quote { reelId } and SHOW THE USER THE COST before going on.",
+        "ez_reel_submit { reelId, confirmCost: true } starts the render.",
+        "Poll ez_reel_status { reelId } until done; each output carries a videoUrl.",
+      ],
+    },
     firstTime:
       "Your first tool call opens a browser to sign in (or call `login`). Then call `whoami` — if " +
       "canWrite is false you're on a free plan (read-only over the MCP) and creating/generating is " +
@@ -403,8 +418,12 @@ export async function generateClip(
         imageUrl,
         motion: args.motion,
         duration: args.duration ?? 5,
-        aspectRatio: args.aspectRatio,
-        resolution: args.resolution,
+        // Sent explicitly rather than left to the server. An omitted setting
+        // once reached the worker as undefined and failed the job; the backend
+        // now defaults it too, but the client should say what it means.
+        // 1080p is gated to paid tiers above Basic, so 720p is the safe default.
+        aspectRatio: args.aspectRatio ?? "16:9",
+        resolution: args.resolution ?? "720p",
         customMotionPrompt: args.customMotionPrompt,
         activeVersionId,
         animatableElements: args.animatableElements,
@@ -416,6 +435,330 @@ export async function generateClip(
 /** Poll a clip-generation job started by generate_clip. */
 export async function getClipStatus(api: ApiClient, args: { jobId: string }) {
   return summarize(await api.get(`/clip-generation/clip-status/${encodeURIComponent(args.jobId)}`));
+}
+
+// ---------------------------------------------------------------------------
+// EZ Reel: the guided flow, and the one to reach for first. 10 to 20 photos, a
+// template and a song go in; the backend picks the motion, timing and cuts, and
+// a finished listing reel comes out. The Studio tools above are the manual path.
+//
+// Photos come in two ways. ez_reel_add_photos uploads local files through the
+// presigned pair (/ez-reel/assets/upload-url, then /from-upload), because the
+// multipart route can't be reached through the JSON api_request proxy.
+// ez_reel_import_photos reuses photos already in a project, keeping any edited
+// version (a staging, a twilight) as the one used.
+// ---------------------------------------------------------------------------
+
+/** Mirrors the backend's MIN_PHOTOS / MAX_PHOTOS (src/modules/ez-reel/types.ts). */
+const EZ_REEL_MIN_PHOTOS = 10;
+const EZ_REEL_MAX_PHOTOS = 20;
+
+/** Templates, songs, pacing and effects, as the authenticated plan sees them. */
+export async function ezReelCatalog(api: ApiClient) {
+  return summarize(await api.get("/ez-reel/catalog"));
+}
+
+export async function listReels(
+  api: ApiClient,
+  args: { page?: number; limit?: number; search?: string },
+) {
+  // The route validates page and limit as digit strings, not numbers.
+  return summarize(
+    await api.get("/ez-reel", {
+      page: args.page?.toString(),
+      limit: args.limit?.toString(),
+      search: args.search,
+    }),
+  );
+}
+
+/**
+ * Upload local photos into the EZ Reel library, in the order given, and return
+ * the asset ids ez_reel_create takes. One file failing doesn't stop the rest;
+ * it is reported beside them. A photo already in the library comes back as its
+ * existing asset (deduped) and costs no upload allowance.
+ */
+export async function ezReelAddPhotos(api: ApiClient, args: { paths: string[] }) {
+  if (args.paths.length > EZ_REEL_MAX_PHOTOS) {
+    throw new Error(`A reel takes at most ${EZ_REEL_MAX_PHOTOS} photos; got ${args.paths.length}.`);
+  }
+
+  const added: Array<{ path: string; assetId: string; deduped: boolean }> = [];
+  const failed: Array<{ path: string; error: string }> = [];
+
+  // One at a time: the order is the reel's running order, and a burst of
+  // parallel uploads gains little against a 16MB-per-file ceiling.
+  for (const path of args.paths) {
+    try {
+      const buffer = await readFile(path);
+      // Same exfiltration guard as add_image_from_file: only real image bytes
+      // leave the machine. GIF passes the sniff but EZ Reel refuses it.
+      const contentType = sniffImageMime(buffer);
+      if (!contentType || contentType === "image/gif") {
+        throw new Error("not a JPEG, PNG or WebP image (checked by file content)");
+      }
+      const filename = basename(path);
+
+      // The declared type is part of the signed policy, so S3 refuses the
+      // upload if it doesn't match. Declare what the bytes actually are.
+      const minted = await api.request({
+        method: "POST",
+        path: "/ez-reel/assets/upload-url",
+        body: { contentType, filename },
+      });
+      const slot = (
+        minted.data as { data?: { url?: string; fields?: Record<string, string>; s3Key?: string } }
+      )?.data;
+      if (!minted.ok || !slot?.url || !slot.fields || !slot.s3Key) {
+        throw new Error(`upload-url failed: HTTP ${minted.status} ${JSON.stringify(minted.data).slice(0, 200)}`);
+      }
+
+      // A presigned POST: every policy field as given, then the file LAST (S3
+      // ignores fields after it). No Authorization header; the signed policy in
+      // the fields is the credential, and it caps the size at 16MB.
+      const form = new FormData();
+      for (const [k, v] of Object.entries(slot.fields)) form.append(k, v);
+      form.append("file", new Blob([new Uint8Array(buffer)], { type: contentType }), filename);
+      const post = await fetch(slot.url, { method: "POST", body: form });
+      if (!post.ok) {
+        const detail = await post.text().catch(() => "");
+        throw new Error(`S3 upload failed: HTTP ${post.status} ${detail.slice(0, 200)}`);
+      }
+
+      const ingested = await api.request({
+        method: "POST",
+        path: "/ez-reel/assets/from-upload",
+        body: { s3Key: slot.s3Key, filename },
+      });
+      const result = (ingested.data as { data?: { asset?: { _id?: string }; deduped?: boolean } })?.data;
+      if (!ingested.ok || !result?.asset?._id) {
+        throw new Error(`ingest failed: HTTP ${ingested.status} ${JSON.stringify(ingested.data).slice(0, 200)}`);
+      }
+      added.push({ path, assetId: String(result.asset._id), deduped: !!result.deduped });
+    } catch (e) {
+      failed.push({ path, error: e instanceof Error ? e.message : String(e) });
+    }
+  }
+
+  return {
+    ok: failed.length === 0,
+    assetIds: added.map((a) => a.assetId),
+    added,
+    failed,
+    note:
+      added.length < EZ_REEL_MIN_PHOTOS
+        ? `A reel needs at least ${EZ_REEL_MIN_PHOTOS} photos; ${added.length} added.`
+        : undefined,
+  };
+}
+
+/**
+ * Bring a project's photos into the EZ Reel library. All of them when imageIds
+ * is omitted. Returns the asset ids ez_reel_create takes.
+ */
+export async function ezReelImportPhotos(
+  api: ApiClient,
+  args: { projectId: string; imageIds?: string[] },
+) {
+  const proj = await api.get(`/projects/${encodeURIComponent(args.projectId)}`);
+  if (!proj.ok) return summarize(proj);
+  const images =
+    (proj.data as { data?: { images?: Array<{ _id?: string; activeVersionId?: string }> } })?.data
+      ?.images ?? [];
+
+  let wanted = images;
+  if (args.imageIds?.length) {
+    const ids = new Set(args.imageIds);
+    wanted = images.filter((i) => ids.has(String(i._id)));
+    const found = new Set(wanted.map((i) => String(i._id)));
+    const missing = args.imageIds.filter((id) => !found.has(id));
+    if (missing.length) {
+      throw new Error(`Not in project ${args.projectId}: ${missing.join(", ")}.`);
+    }
+  }
+  if (wanted.length === 0) {
+    throw new Error(
+      `Project ${args.projectId} has no photos. Add them with add_image_from_file first.`,
+    );
+  }
+  if (wanted.length > EZ_REEL_MAX_PHOTOS) {
+    throw new Error(
+      `A reel takes at most ${EZ_REEL_MAX_PHOTOS} photos and this would import ` +
+        `${wanted.length}. Pass imageIds to choose which.`,
+    );
+  }
+
+  const res = await api.request({
+    method: "POST",
+    path: "/ez-reel/assets/import",
+    body: {
+      images: wanted.map((i) => ({
+        projectId: args.projectId,
+        imageId: String(i._id),
+        // The active version is the one the user sees and expects in the reel.
+        ...(i.activeVersionId ? { versionId: String(i.activeVersionId) } : {}),
+      })),
+    },
+  });
+  if (!res.ok) return summarize(res);
+
+  const data = (
+    res.data as {
+      data?: {
+        items?: Array<{ asset?: { _id?: string }; hasClip?: boolean }>;
+        skipped?: Array<{ id: string; reason: string }>;
+      };
+    }
+  )?.data;
+  const assetIds = (data?.items ?? []).map((i) => String(i.asset?._id));
+  return {
+    status: res.status,
+    ok: true,
+    assetIds,
+    skipped: data?.skipped ?? [],
+    note:
+      assetIds.length < EZ_REEL_MIN_PHOTOS
+        ? `A reel needs at least ${EZ_REEL_MIN_PHOTOS} photos; ${assetIds.length} imported so far.`
+        : undefined,
+  };
+}
+
+/**
+ * Create a reel in one call: the reel, its outputs (one per aspect, all on the
+ * same template and song) and its photos in order. Nothing is charged here;
+ * ez_reel_quote prices it and ez_reel_submit renders it.
+ */
+export async function ezReelCreate(
+  api: ApiClient,
+  args: {
+    title?: string;
+    assetIds: string[];
+    templateId: string;
+    trackId?: string;
+    pacing?: "beats" | "song";
+    aspects?: Array<"9:16" | "16:9">;
+    listing?: {
+      address?: string;
+      price?: string;
+      beds?: string;
+      baths?: string;
+      sqft?: string;
+      yearBuilt?: string;
+    };
+  },
+) {
+  if (args.assetIds.length < EZ_REEL_MIN_PHOTOS || args.assetIds.length > EZ_REEL_MAX_PHOTOS) {
+    throw new Error(
+      `A reel takes ${EZ_REEL_MIN_PHOTOS} to ${EZ_REEL_MAX_PHOTOS} photos; got ${args.assetIds.length}.`,
+    );
+  }
+
+  const created = await api.request({ method: "POST", path: "/ez-reel", body: { title: args.title } });
+  if (!created.ok) return summarize(created);
+  const reelId = (created.data as { data?: { _id?: string } })?.data?._id;
+  if (!reelId) {
+    throw new Error(`create response missing the reel id: ${JSON.stringify(created.data).slice(0, 200)}`);
+  }
+  const base = `/ez-reel/${encodeURIComponent(reelId)}`;
+
+  // Vertical by default: an EZ Reel is mostly posted to Reels, Shorts and TikTok.
+  const aspects = args.aspects?.length ? args.aspects : (["9:16"] as const);
+  const settings = await api.request({
+    method: "PATCH",
+    path: base,
+    body: {
+      title: args.title,
+      listing: args.listing,
+      selections: aspects.map((aspect) => ({
+        templateId: args.templateId,
+        trackId: args.trackId,
+        pacing: args.pacing,
+        aspect,
+      })),
+    },
+  });
+  // The reel exists by now, so its id goes back even on failure: a retry can
+  // fix it with api_request instead of leaving an orphan behind.
+  if (!settings.ok) return { reelId, failedStep: "settings", ...summarize(settings) };
+
+  const shots = await api.request({
+    method: "PUT",
+    path: `${base}/shots`,
+    body: { shots: args.assetIds.map((assetId) => ({ assetId })) },
+  });
+  if (!shots.ok) return { reelId, failedStep: "shots", ...summarize(shots) };
+
+  return {
+    ok: true,
+    reelId,
+    outputs: aspects.map((aspect) => ({ templateId: args.templateId, trackId: args.trackId ?? null, aspect })),
+    photos: args.assetIds.length,
+    next: "Call ez_reel_quote with this reelId to see the credit cost, then ez_reel_submit to render.",
+  };
+}
+
+/** Price a reel as it stands. Work already done (a cached clip) costs nothing. */
+export async function ezReelQuote(api: ApiClient, args: { reelId: string }) {
+  return summarize(await api.get(`/ez-reel/${encodeURIComponent(args.reelId)}/quote`));
+}
+
+/** Shape a render row down to what a caller polls for. */
+function renderSummary(r: {
+  _id?: string;
+  variantId?: string;
+  templateId?: string;
+  trackId?: string;
+  aspect?: string;
+  status?: string;
+  progress?: number;
+  error?: string;
+  videoUrl?: string;
+  thumbnailUrl?: string;
+}) {
+  return {
+    renderId: r._id,
+    variantId: r.variantId,
+    templateId: r.templateId,
+    trackId: r.trackId,
+    aspect: r.aspect,
+    status: r.status,
+    progress: r.progress,
+    error: r.error,
+    videoUrl: r.videoUrl,
+    thumbnailUrl: r.thumbnailUrl,
+  };
+}
+
+/**
+ * Render the reel. Spends credits, so the caller must have shown the user the
+ * quote and pass confirmCost: true; the schema refuses anything else.
+ */
+export async function ezReelSubmit(api: ApiClient, args: { reelId: string; confirmCost: true }) {
+  const res = await api.request({
+    method: "POST",
+    path: `/ez-reel/${encodeURIComponent(args.reelId)}/submit`,
+    body: { source: "reel" },
+  });
+  if (!res.ok) return summarize(res);
+  const data = (res.data as { data?: { renders?: unknown[]; quote?: unknown } })?.data;
+  return {
+    status: res.status,
+    ok: true,
+    quote: data?.quote,
+    renders: (data?.renders ?? []).map((r) => renderSummary(r as Parameters<typeof renderSummary>[0])),
+    next: "Rendering is async. Poll ez_reel_status until every output is ready or failed.",
+  };
+}
+
+/** Each output's render state, with the download link once it is ready. */
+export async function ezReelStatus(api: ApiClient, args: { reelId: string }) {
+  const res = await api.get(`/ez-reel/${encodeURIComponent(args.reelId)}/renders`);
+  if (!res.ok) return summarize(res);
+  const renders = ((res.data as { data?: unknown[] })?.data ?? []).map((r) =>
+    renderSummary(r as Parameters<typeof renderSummary>[0]),
+  );
+  const done = renders.length > 0 && renders.every((r) => r.status === "ready" || r.status === "failed");
+  return { status: res.status, ok: true, done, renders };
 }
 
 /**
