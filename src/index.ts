@@ -27,6 +27,14 @@ import {
   addTimelineOverlay,
   moveTimelineElement,
   reorderTimeline,
+  ezReelCatalog,
+  listReels,
+  ezReelAddPhotos,
+  ezReelImportPhotos,
+  ezReelCreate,
+  ezReelQuote,
+  ezReelSubmit,
+  ezReelStatus,
 } from "./tools.js";
 
 /**
@@ -42,7 +50,7 @@ import {
 
 const api = new ApiClient();
 
-const server = new McpServer({ name: "reel-estate-backend", version: "0.3.0" });
+const server = new McpServer({ name: "reel-estate-backend", version: "0.4.0" });
 
 function ok(data: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
@@ -334,7 +342,8 @@ server.registerTool(
     title: "Generate a video clip from a project image",
     description:
       "Animate one still project image into a video clip (Runway Gen-4). Async — returns a jobId; " +
-      "poll get_clip_status. imageUrl is auto-resolved from the project if omitted. Costs credits.",
+      "poll get_clip_status. imageUrl is auto-resolved from the project if omitted. Costs credits. " +
+      "For a whole listing video, ez_reel_create is usually the better tool.",
     inputSchema: {
       projectId: z.string(),
       imageId: z.string(),
@@ -344,13 +353,202 @@ server.registerTool(
       duration: z.number().min(3).max(10).optional().describe("Seconds, 3-10 (default 5)."),
       customMotionPrompt: z.string().max(500).optional().describe("Required when motion='custom'."),
       imageUrl: z.string().url().optional().describe("Auto-resolved from the project if omitted."),
-      aspectRatio: z.string().optional(),
-      resolution: z.string().optional(),
+      aspectRatio: z.string().optional().describe("Default 16:9."),
+      resolution: z
+        .string()
+        .optional()
+        .describe("Default 720p. 1080p needs the Agent, Pro or Enterprise plan."),
     },
   },
   async (args) => {
     try {
       return ok(await generateClip(api, args));
+    } catch (e) {
+      return fail(e);
+    }
+  },
+);
+
+server.registerTool(
+  "ez_reel_catalog",
+  {
+    title: "EZ Reel templates and songs",
+    description:
+      "GET /ez-reel/catalog: the templates, songs (tracks), pacing options and effects ez_reel_create " +
+      "accepts, as the signed-in plan sees them (effects are locked on free). Call before ez_reel_create " +
+      "to choose a templateId and trackId.",
+    inputSchema: {},
+  },
+  async () => {
+    try {
+      return ok(await ezReelCatalog(api));
+    } catch (e) {
+      return fail(e);
+    }
+  },
+);
+
+server.registerTool(
+  "list_reels",
+  {
+    title: "List EZ Reels",
+    description: "GET /ez-reel: the user's EZ Reels. Supports paging and an address search.",
+    inputSchema: {
+      page: z.number().int().min(1).optional(),
+      limit: z.number().int().min(1).max(50).optional(),
+      search: z.string().max(200).optional(),
+    },
+  },
+  async (args) => {
+    try {
+      return ok(await listReels(api, args));
+    } catch (e) {
+      return fail(e);
+    }
+  },
+);
+
+server.registerTool(
+  "ez_reel_add_photos",
+  {
+    title: "Upload photos to EZ Reel",
+    description:
+      "Upload 10 to 20 LOCAL photo files (JPEG, PNG or WebP, under 16MB each) into the EZ Reel library, " +
+      "in running order, and return their assetIds for ez_reel_create. Uses a presigned upload (no " +
+      "storage creds). A file that fails is listed in `failed` without stopping the rest; a photo " +
+      "already in the library is reused (deduped) at no upload cost.",
+    inputSchema: {
+      paths: z.array(z.string()).min(1).max(20).describe("Absolute paths to local image files, in order."),
+    },
+  },
+  async (args) => {
+    try {
+      return ok(await ezReelAddPhotos(api, args));
+    } catch (e) {
+      return fail(e);
+    }
+  },
+);
+
+server.registerTool(
+  "ez_reel_import_photos",
+  {
+    title: "Bring project photos into EZ Reel",
+    description:
+      "Import a project's photos into the EZ Reel library (all of them, or the imageIds given; at most " +
+      "20) and return their assetIds for ez_reel_create. For photos already in a Studio project; for " +
+      "local files use ez_reel_add_photos. Each photo's active edited version (staging, twilight) is " +
+      "the one imported. No upload, no charge.",
+    inputSchema: {
+      projectId: z.string(),
+      imageIds: z.array(z.string()).max(20).optional().describe("Defaults to every photo in the project."),
+    },
+  },
+  async (args) => {
+    try {
+      return ok(await ezReelImportPhotos(api, args));
+    } catch (e) {
+      return fail(e);
+    }
+  },
+);
+
+server.registerTool(
+  "ez_reel_create",
+  {
+    title: "Create an EZ Reel",
+    description:
+      "Create a listing reel from 10 to 20 EZ Reel photos (assetIds, in running order) on one template " +
+      "and song, as one output per aspect. Motion, timing and cuts are chosen automatically. Nothing is " +
+      "charged: call ez_reel_quote next, show the user the cost, then ez_reel_submit.",
+    inputSchema: {
+      assetIds: z.array(z.string()).min(10).max(20).describe("From ez_reel_add_photos or ez_reel_import_photos, in order."),
+      templateId: z.string().describe("From ez_reel_catalog."),
+      trackId: z.string().optional().describe("Song id from ez_reel_catalog."),
+      pacing: z
+        .enum(["beats", "song"])
+        .optional()
+        .describe("beats = cuts land on the beat; song = the reel runs the length of the song."),
+      aspects: z
+        .array(z.enum(["9:16", "16:9"]))
+        .min(1)
+        .max(2)
+        .optional()
+        .describe("One output per aspect. Default ['9:16'] (Reels, Shorts, TikTok)."),
+      title: z.string().max(200).optional(),
+      listing: z
+        .object({
+          address: z.string().max(300).optional(),
+          price: z.string().max(40).optional(),
+          beds: z.string().max(20).optional(),
+          baths: z.string().max(20).optional(),
+          sqft: z.string().max(20).optional(),
+          yearBuilt: z.string().max(10).optional(),
+        })
+        .optional()
+        .describe("Listing facts the templates can show as text."),
+    },
+  },
+  async (args) => {
+    try {
+      return ok(await ezReelCreate(api, args));
+    } catch (e) {
+      return fail(e);
+    }
+  },
+);
+
+server.registerTool(
+  "ez_reel_quote",
+  {
+    title: "Price an EZ Reel",
+    description:
+      "GET /ez-reel/:id/quote: the credits a render would cost now. Work already done (cached clips) is " +
+      "free. Always show this to the user before ez_reel_submit.",
+    inputSchema: { reelId: z.string() },
+  },
+  async (args) => {
+    try {
+      return ok(await ezReelQuote(api, args));
+    } catch (e) {
+      return fail(e);
+    }
+  },
+);
+
+server.registerTool(
+  "ez_reel_submit",
+  {
+    title: "Render an EZ Reel",
+    description:
+      "Start rendering every output of the reel. SPENDS CREDITS: only call after showing the user " +
+      "ez_reel_quote and getting their go-ahead, and pass confirmCost: true. Async; poll ez_reel_status.",
+    inputSchema: {
+      reelId: z.string(),
+      confirmCost: z.literal(true).describe("Set true only after the user has seen and accepted the quote."),
+    },
+  },
+  async (args) => {
+    try {
+      return ok(await ezReelSubmit(api, args));
+    } catch (e) {
+      return fail(e);
+    }
+  },
+);
+
+server.registerTool(
+  "ez_reel_status",
+  {
+    title: "EZ Reel render status",
+    description:
+      "Each output's render state (queued, generating, composing, ready, failed) and progress, with a " +
+      "videoUrl once ready. done=true when every output has finished.",
+    inputSchema: { reelId: z.string() },
+  },
+  async (args) => {
+    try {
+      return ok(await ezReelStatus(api, args));
     } catch (e) {
       return fail(e);
     }
@@ -592,6 +790,10 @@ server.registerPrompt(
       "",
       h.firstTime,
       "",
+      `**${h.ezReel.title}**`,
+      ...h.ezReel.steps.map((s, i) => `${i + 1}. ${s}`),
+      "",
+      "**Studio: the manual path**",
       ...h.steps.map((s) => `${s.n}. **${s.title}** — ${s.do}\n   tools: ${s.tools.join(", ")}`),
       "",
       "Notes:",

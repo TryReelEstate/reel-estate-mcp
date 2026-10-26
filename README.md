@@ -94,6 +94,10 @@ own authorization and plan rules apply.
 | `list_clips` · `list_movies` · `list_voices` | Browse clips, rendered movies, TTS voices |
 | `resolve_address` | Geocode a free-text address → ranked candidates (for real-listing projects) |
 | `add_image_from_file` | Upload a **local** image into a project (presigned upload — no storage creds) |
+| `ez_reel_add_photos` · `ez_reel_import_photos` | Upload 10 to 20 **local** photos into EZ Reel (presigned), or reuse photos already in a project |
+| `ez_reel_catalog` | EZ Reel templates and songs |
+| `ez_reel_create` · `ez_reel_quote` · `ez_reel_submit` · `ez_reel_status` | **The fast path:** build a finished listing reel from photos, a template and a song; price it, render it (asks for cost confirmation), poll for the video |
+| `list_reels` | Browse EZ Reels |
 | `generate_clip` · `get_clip_status` | Animate a photo into a video clip (Runway); poll the job |
 | `edit_image` | AI photo edit — virtual staging, twilight, upscale, seasonal, replace/remove/add, manual |
 | `add_timeline_audio` · `add_timeline_overlay` | Place voiceover/music/audio or an image/text overlay |

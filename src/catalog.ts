@@ -40,6 +40,26 @@ export const CATALOG: EndpointGroup[] = [
     ],
   },
   {
+    group: "EZ Reel (guided listing reels; prefer the ez_reel_* tools)",
+    prefix: "/ez-reel",
+    endpoints: [
+      { method: "GET", path: "/ez-reel/catalog", note: "templates, songs, pacing, effects for this plan" },
+      { method: "GET", path: "/ez-reel", note: "list reels (query: page, limit, search; digits as strings)" },
+      { method: "POST", path: "/ez-reel", note: "create (body: { title? })" },
+      { method: "GET", path: "/ez-reel/:id" },
+      { method: "PATCH", path: "/ez-reel/:id", note: "settings: title, listing facts, selections[] (templateId, trackId, pacing, aspect)" },
+      { method: "PUT", path: "/ez-reel/:id/shots", note: "photo list in order (body: { shots: [{ assetId, motion?, look?, vfx? }] }), 10 to 20 included" },
+      { method: "GET", path: "/ez-reel/:id/quote", note: "credit cost of a render now" },
+      { method: "POST", path: "/ez-reel/:id/submit", note: "render every output; spends credits (async, 202)" },
+      { method: "GET", path: "/ez-reel/:id/renders", note: "render rows: status, progress, videoUrl" },
+      { method: "GET", path: "/ez-reel/:id/output-status", note: "per output: fresh, stale or missing" },
+      { method: "GET", path: "/ez-reel/assets", note: "the user's EZ Reel photo library" },
+      { method: "POST", path: "/ez-reel/assets/upload-url", note: "mint a presigned S3 POST (body: { contentType: image/jpeg|png|webp, filename? }) → { url, fields, s3Key }; valid 5 min, 16MB max" },
+      { method: "POST", path: "/ez-reel/assets/from-upload", note: "ingest the PUT photo (body: { s3Key, filename? }) → { asset, deduped }" },
+      { method: "POST", path: "/ez-reel/assets/import", note: "bring in photos (body: { images: [{ projectId, imageId, versionId? }] } or assetIds, clipIds, reelClipIds), max 20 each" },
+    ],
+  },
+  {
     group: "Clips",
     prefix: "/clips",
     endpoints: [

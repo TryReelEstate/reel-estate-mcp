@@ -8,7 +8,10 @@ import { fileURLToPath } from "node:url";
 // default cwd-relative loading silently dropped our config (e.g.
 // MCP_OAUTH_CLIENT_ID → unintended DCR fallback). Any real env var already set by
 // the client still wins (dotenv doesn't override existing process.env).
-loadEnv({ path: join(dirname(fileURLToPath(import.meta.url)), "..", ".env") });
+// quiet: dotenv 17 prints an "injected env" banner to STDOUT by default, and
+// stdout carries the MCP frames, so the banner reached clients as a malformed
+// first message.
+loadEnv({ path: join(dirname(fileURLToPath(import.meta.url)), "..", ".env"), quiet: true });
 
 /** Default backend when MCP_SERVER_URL isn't set — Reel Estate production. */
 const DEFAULT_SERVER_URL = "https://api.tryreelestate.com";
