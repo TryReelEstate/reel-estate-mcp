@@ -453,6 +453,28 @@ export async function getClipStatus(api: ApiClient, args: { jobId: string }) {
 const EZ_REEL_MIN_PHOTOS = 10;
 const EZ_REEL_MAX_PHOTOS = 20;
 
+/**
+ * The MLS rights attestation, word for word as the app shows it
+ * (frontend components/ez-reel/mls-attestation-dialog.tsx). The version must
+ * match the app's MLS_ATTESTATION_VERSION: the backend records it as the
+ * wording the user agreed to, so bump both together with the copy.
+ */
+export const MLS_ATTESTATION_VERSION = "v2";
+export const MLS_ATTESTATION_TEXT =
+  "Before accessing your MLS-compliant video link, please confirm: " +
+  "(1) The physical structure, dimensions, and permanent features of the property are accurately " +
+  "represented and have not been altered; " +
+  "(2) Any AI-generated or virtually staged elements (furniture, decor, landscaping, lighting effects, " +
+  'etc.) will be clearly labeled as "AI Modified." ' +
+  "(3) Original, unaltered versions of any digitally altered images will be made accessible to " +
+  "prospective buyers as required by applicable law and MLS rules; " +
+  "(4) You have not used this content to add, remove, or alter structural features, views, or " +
+  "permanent fixtures of the property. " +
+  "By agreeing, you confirm that you are solely responsible for ensuring compliance with your local " +
+  "MLS guidelines, NAR Code of Ethics Articles 2 and 12, California AB 723 (if applicable), and all " +
+  "other federal, state, or local laws governing AI-generated real estate marketing content. Reel " +
+  "Estate does not review, approve, or guarantee the compliance of user-generated content.";
+
 /** Templates, songs, pacing and effects, as the authenticated plan sees them. */
 export async function ezReelCatalog(api: ApiClient) {
   return summarize(await api.get("/ez-reel/catalog"));
@@ -627,6 +649,11 @@ export async function ezReelImportPhotos(
  * Create a reel in one call: the reel, its outputs (one per aspect, all on the
  * same template and song) and its photos in order. Nothing is charged here;
  * ez_reel_quote prices it and ez_reel_submit renders it.
+ *
+ * The address is required up front because submit refuses a reel without one
+ * (NO_ADDRESS), and finding that out after the quote costs a second round
+ * trip. `textOff` renders the outputs with no on-screen text at all, for
+ * footage that gets its own type in an edit.
  */
 export async function ezReelCreate(
   api: ApiClient,
@@ -637,8 +664,9 @@ export async function ezReelCreate(
     trackId?: string;
     pacing?: "beats" | "song";
     aspects?: Array<"9:16" | "16:9">;
-    listing?: {
-      address?: string;
+    textOff?: boolean;
+    listing: {
+      address: string;
       price?: string;
       beds?: string;
       baths?: string;
@@ -651,6 +679,9 @@ export async function ezReelCreate(
     throw new Error(
       `A reel takes ${EZ_REEL_MIN_PHOTOS} to ${EZ_REEL_MAX_PHOTOS} photos; got ${args.assetIds.length}.`,
     );
+  }
+  if (!args.listing?.address?.trim()) {
+    throw new Error("A reel needs the property address (listing.address); submit refuses one without it.");
   }
 
   const created = await api.request({ method: "POST", path: "/ez-reel", body: { title: args.title } });
@@ -688,10 +719,28 @@ export async function ezReelCreate(
   });
   if (!shots.ok) return { reelId, failedStep: "shots", ...summarize(shots) };
 
+  // The text switch is per output and lives on the hooks endpoint, beside the
+  // cards it governs; settings cannot carry it.
+  if (args.textOff) {
+    for (const aspect of aspects) {
+      const text = await api.request({
+        method: "PUT",
+        path: `${base}/hooks`,
+        body: { templateId: args.templateId, aspect, textOff: true, hooks: [] },
+      });
+      if (!text.ok) return { reelId, failedStep: "textOff", ...summarize(text) };
+    }
+  }
+
   return {
     ok: true,
     reelId,
-    outputs: aspects.map((aspect) => ({ templateId: args.templateId, trackId: args.trackId ?? null, aspect })),
+    outputs: aspects.map((aspect) => ({
+      templateId: args.templateId,
+      trackId: args.trackId ?? null,
+      aspect,
+      textOff: !!args.textOff,
+    })),
     photos: args.assetIds.length,
     next: "Call ez_reel_quote with this reelId to see the credit cost, then ez_reel_submit to render.",
   };
@@ -732,14 +781,45 @@ function renderSummary(r: {
 /**
  * Render the reel. Spends credits, so the caller must have shown the user the
  * quote and pass confirmCost: true; the schema refuses anything else.
+ *
+ * An MLS output also needs the user's rights attestation. It is stamped here,
+ * at the moment the agreeing call is made, because the record is of when the
+ * claim was given. Without it the backend answers MLS_ATTESTATION_REQUIRED,
+ * and the wording comes back with that answer so it can be shown.
  */
-export async function ezReelSubmit(api: ApiClient, args: { reelId: string; confirmCost: true }) {
+export async function ezReelSubmit(
+  api: ApiClient,
+  args: { reelId: string; confirmCost: true; mlsAttestation?: true },
+) {
   const res = await api.request({
     method: "POST",
     path: `/ez-reel/${encodeURIComponent(args.reelId)}/submit`,
-    body: { source: "reel" },
+    body: {
+      source: "reel",
+      ...(args.mlsAttestation
+        ? {
+            mlsAttestation: {
+              agreed: true,
+              agreedAt: new Date().toISOString(),
+              attestationVersion: MLS_ATTESTATION_VERSION,
+            },
+          }
+        : {}),
+    },
   });
-  if (!res.ok) return summarize(res);
+  if (!res.ok) {
+    const code = (res.data as { error?: { code?: string } })?.error?.code;
+    if (code === "MLS_ATTESTATION_REQUIRED") {
+      return {
+        ...summarize(res),
+        attestation: MLS_ATTESTATION_TEXT,
+        next:
+          "Show the user this attestation word for word. Only if they agree, call ez_reel_submit again " +
+          "with mlsAttestation: true. Never agree on their behalf.",
+      };
+    }
+    return summarize(res);
+  }
   const data = (res.data as { data?: { renders?: unknown[]; quote?: unknown } })?.data;
   return {
     status: res.status,
