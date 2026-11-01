@@ -35,6 +35,7 @@ import {
   ezReelQuote,
   ezReelSubmit,
   ezReelStatus,
+  MLS_ATTESTATION_TEXT,
 } from "./tools.js";
 
 /**
@@ -50,7 +51,7 @@ import {
 
 const api = new ApiClient();
 
-const server = new McpServer({ name: "reel-estate-backend", version: "0.4.0" });
+const server = new McpServer({ name: "reel-estate-backend", version: "0.4.1" });
 
 function ok(data: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
@@ -343,14 +344,13 @@ server.registerTool(
     description:
       "Animate one still project image into a video clip (Runway Gen-4). Async — returns a jobId; " +
       "poll get_clip_status. imageUrl is auto-resolved from the project if omitted. Costs credits. " +
-      "For a whole listing video, ez_reel_create is usually the better tool.",
+      "Clips are always 5 seconds. For a whole listing video, ez_reel_create is usually the better tool.",
     inputSchema: {
       projectId: z.string(),
       imageId: z.string(),
       motion: z.enum([
         "auto", "zoom_in", "zoom_out", "no_motion", "orbit", "orbit_left", "orbit_right", "drone", "custom",
       ]),
-      duration: z.number().min(3).max(10).optional().describe("Seconds, 3-10 (default 5)."),
       customMotionPrompt: z.string().max(500).optional().describe("Required when motion='custom'."),
       imageUrl: z.string().url().optional().describe("Auto-resolved from the project if omitted."),
       aspectRatio: z.string().optional().describe("Default 16:9."),
@@ -459,8 +459,10 @@ server.registerTool(
     title: "Create an EZ Reel",
     description:
       "Create a listing reel from 10 to 20 EZ Reel photos (assetIds, in running order) on one template " +
-      "and song, as one output per aspect. Motion, timing and cuts are chosen automatically. Nothing is " +
-      "charged: call ez_reel_quote next, show the user the cost, then ez_reel_submit.",
+      "and song, as one output per aspect. Motion, timing and cuts are chosen automatically. The " +
+      "property address is required (the reel cannot render without one) and is printed on templates " +
+      "that carry text unless textOff is set. Nothing is charged: call ez_reel_quote next, show the " +
+      "user the cost, then ez_reel_submit.",
     inputSchema: {
       assetIds: z.array(z.string()).min(10).max(20).describe("From ez_reel_add_photos or ez_reel_import_photos, in order."),
       templateId: z.string().describe("From ez_reel_catalog."),
@@ -476,17 +478,20 @@ server.registerTool(
         .optional()
         .describe("One output per aspect. Default ['9:16'] (Reels, Shorts, TikTok)."),
       title: z.string().max(200).optional(),
+      textOff: z
+        .boolean()
+        .optional()
+        .describe("true renders every output with no on-screen text (address, price, cards). Default false."),
       listing: z
         .object({
-          address: z.string().max(300).optional(),
+          address: z.string().trim().min(1).max(300).describe("Required. The property address."),
           price: z.string().max(40).optional(),
           beds: z.string().max(20).optional(),
           baths: z.string().max(20).optional(),
           sqft: z.string().max(20).optional(),
           yearBuilt: z.string().max(10).optional(),
         })
-        .optional()
-        .describe("Listing facts the templates can show as text."),
+        .describe("Listing facts the templates can show as text. address is required."),
     },
   },
   async (args) => {
@@ -522,10 +527,20 @@ server.registerTool(
     title: "Render an EZ Reel",
     description:
       "Start rendering every output of the reel. SPENDS CREDITS: only call after showing the user " +
-      "ez_reel_quote and getting their go-ahead, and pass confirmCost: true. Async; poll ez_reel_status.",
+      "ez_reel_quote and getting their go-ahead, and pass confirmCost: true. A reel with an MLS output " +
+      "also needs the user's MLS attestation: show them the text below word for word and pass " +
+      "mlsAttestation: true only if they agree. Async; poll ez_reel_status.\n\nMLS attestation: " +
+      MLS_ATTESTATION_TEXT,
     inputSchema: {
       reelId: z.string(),
       confirmCost: z.literal(true).describe("Set true only after the user has seen and accepted the quote."),
+      mlsAttestation: z
+        .literal(true)
+        .optional()
+        .describe(
+          "Only for a reel with an MLS output, and only after the user has read the MLS attestation in " +
+            "this tool's description and agreed to it. Never set it on the user's behalf.",
+        ),
     },
   },
   async (args) => {
