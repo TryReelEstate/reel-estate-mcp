@@ -344,14 +344,13 @@ server.registerTool(
     description:
       "Animate one still project image into a video clip (Runway Gen-4). Async — returns a jobId; " +
       "poll get_clip_status. imageUrl is auto-resolved from the project if omitted. Costs credits. " +
-      "For a whole listing video, ez_reel_create is usually the better tool.",
+      "Clips are always 5 seconds. For a whole listing video, ez_reel_create is usually the better tool.",
     inputSchema: {
       projectId: z.string(),
       imageId: z.string(),
       motion: z.enum([
         "auto", "zoom_in", "zoom_out", "no_motion", "orbit", "orbit_left", "orbit_right", "drone", "custom",
       ]),
-      duration: z.number().min(3).max(10).optional().describe("Seconds, 3-10 (default 5)."),
       customMotionPrompt: z.string().max(500).optional().describe("Required when motion='custom'."),
       imageUrl: z.string().url().optional().describe("Auto-resolved from the project if omitted."),
       aspectRatio: z.string().optional().describe("Default 16:9."),

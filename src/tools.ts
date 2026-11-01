@@ -182,7 +182,7 @@ export function help() {
         do:
           "Animate the active version of an image (auto/zoom/orbit/drone/custom). Async — poll " +
           "get_clip_status with the returned jobId. The finished clip auto-binds to its timeline element.",
-        example: { generate_clip: { projectId: "<id>", imageId: "<id>", motion: "drone", duration: 5 } },
+        example: { generate_clip: { projectId: "<id>", imageId: "<id>", motion: "drone" } },
       },
       {
         n: 6,
@@ -367,7 +367,6 @@ export async function generateClip(
     projectId: string;
     imageId: string;
     motion: string;
-    duration?: number;
     imageUrl?: string;
     customMotionPrompt?: string;
     aspectRatio?: string;
@@ -417,7 +416,10 @@ export async function generateClip(
         imageId: args.imageId,
         imageUrl,
         motion: args.motion,
-        duration: args.duration ?? 5,
+        // Always 5s. The backend clip schema only accepts 3 or 5 and checks it
+        // after Runway has already generated (and charged for) the clip, so any
+        // other value fails the job late. Not caller-configurable on purpose.
+        duration: 5,
         // Sent explicitly rather than left to the server. An omitted setting
         // once reached the worker as undefined and failed the job; the backend
         // now defaults it too, but the client should say what it means.
